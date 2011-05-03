@@ -69,7 +69,6 @@ def ImapConnect(xoauth_string):
     print "This server does not support the Gmail IMAP Extensions."
     sys.exit(1)
   GImapSendID(imap_conn, 'Jay Test IMAP Client', '0.000001', 'jhltechservices.com', 'support@jhltechservices.com')
-  imap_conn.select('[Gmail]/All Mail', readonly=True)
   return imap_conn
 
 def GImapSearch(imapconn, gmail_search):
@@ -103,7 +102,7 @@ def GImapGetMessageLabels(imapconn, uid):
   if t != 'OK':
     raise GImapGetMessageLabelsError('GImap Get Message Labels Failed: %s' % t)
   if d[0] != None:
-    labels = re.search('^[0-9]* \(X-GM-LABELS \((.*?)\) UID %s\)' % uid, d[0]).group(1).replace('\\\\', '\\')
+    labels = re.search('^[0-9]* \(X-GM-LABELS \((.*?)\) UID %s\)' % uid, d[0]).group(1)
     labels_list = shlex.split(labels)
   else:
     labels_list = []
@@ -122,6 +121,7 @@ def GImapSetMessageLabels(imapconn, uid, labels):
   Note: specified labels are added but the message's existing labels that are not specified are not removed.
   '''
   labels_string = '"'+'" "'.join(labels)+'"'
-  t, d = imapconn.store(uid, '+X-GM-LABELS', labels_string)
+  t, d = imapconn.uid('STORE', uid, '+X-GM-LABELS', labels_string)
   if t != 'OK':
-    raise GImapSetMessageLabelsError('GImap Set Message Labels Failed: %s' % t)
+    print 'GImap Set Message Labels Failed: %s' % t
+    exit(33)
