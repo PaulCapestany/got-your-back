@@ -114,7 +114,7 @@ def requestOAuthAccess(email, debug=False):
   except gdata.service.FetchingOAuthRequestTokenFailed, e:
     if str(e).find('Timestamp') != -1:
       print "In order to use GYB, your system time needs to be correct.\nPlease fix your time and try again."
-      exit(5)
+      sys.exit(5)
     else:
       print 'Error: %s' % e
   if domain.lower() != 'gmail.com' and domain.lower() != 'googlemail.com':
@@ -132,7 +132,7 @@ def requestOAuthAccess(email, debug=False):
     final_token = s.UpgradeToOAuthAccessToken(request_token)
   except gdata.service.TokenUpgradeFailed:
     print 'Failed to upgrade the token. Did you grant GYB access in your browser?'
-    exit(4)
+    sys.exit(4)
   cfgFile = '%s%s.cfg' % (getProgPath(), email)
   f = open(cfgFile, 'w')
   f.write('%s\n%s' % (final_token.key, final_token.secret))
@@ -177,7 +177,7 @@ def getMessagesToBackupList(imapconn, gmail_search=None):
     t, d = imapconn.uid('SEARCH', 'ALL')
     if t != 'OK':
       print 'Problem getting all mail!'
-      exit(1)
+      sys.exit(1)
     messages_to_backup = d[0].split()
   return messages_to_backup
 
@@ -220,7 +220,7 @@ def main(argv):
   (options, args) = options_parser.parse_args()
   if options.version:
     print 'Got Your Back %s' % __version__
-    exit(0)
+    sys.exit(0)
   if not options.email:
     options_parser.print_help()
     print "ERROR: --email or -e is required."
@@ -232,14 +232,14 @@ def main(argv):
     print "Error: you did not authorize the OAuth token in the browser with the %s Google Account. Please make sure you are logged in to the correct account when authorizing the token in the browser." % options.email
     cfgFile = '%s%s.cfg' % (getProgPath(), options.email)
     os.remove(cfgFile)
-    exit(9)
+    sys.exit(9)
   imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug) # dynamically generate the xoauth_string since they expire after 10 minutes
   if not os.path.isdir(options.folder):
     if options.action == 'backup':
       os.mkdir(options.folder)
     else:
       print 'Error: Folder %s does not exist. Cannot restore.' % options.folder
-      exit(3)
+      sys.exit(3)
   sqldbfile = os.path.join(options.folder, 'msg-db.sqlite')
   sqlconn = sqlite3.connect(sqldbfile)
   sqlconn.text_factory = str
@@ -252,7 +252,7 @@ def main(argv):
     r, d = imapconn.select(ALL_MAIL, readonly=True)
     if r == 'NO':
       print "Error: Cannot select the Gmail \"All Mail\" folder. Please make sure it is not hidden from IMAP."
-      exit(3)
+      sys.exit(3)
   if options.action == 'backup':
     imapconn.select(ALL_MAIL, readonly=True)
     messages_to_process = getMessagesToBackupList(imapconn, options.gmail_search)
@@ -279,7 +279,7 @@ def main(argv):
           r, full_message_data = imapconn.uid('FETCH', message_num, '(X-GM-LABELS INTERNALDATE FLAGS BODY.PEEK[])')
           if r != 'OK':
             print 'Error: %s' % r
-            exit(5)
+            sys.exit(5)
           break
         except imaplib.IMAP4.abort:
           print 'imaplib.abort error, retrying...'
@@ -351,14 +351,14 @@ def main(argv):
           r, d = imapconn.append(ALL_MAIL, flags_string, imaplib.Internaldate2tuple(message_internaldate), full_message)
           if r != 'OK':
             print 'Error: %s' % r
-            exit(5)
+            sys.exit(5)
           restored_uid = int(re.search('^[APPENDUID [0-9]* ([0-9]*)] \(Success\)$', d[0]).group(1))
           if len(labels) > 0:
             labels_string = '("'+'" "'.join(labels)+'")'
             r, d = imapconn.uid('STORE', restored_uid, '+X-GM-LABELS', labels_string)
             if r != 'OK':
               print 'GImap Set Message Labels Failed: %s' % r
-              exit(33)
+              sys.exit(33)
           break
         except imaplib.IMAP4.abort:
           print 'imaplib.abort error, retrying...'
