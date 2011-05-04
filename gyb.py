@@ -19,8 +19,11 @@
 For more information, see http://code.google.com/p/got-your-back/
 """
 
-__author__ = 'jlee@pbu.edu (Jay Lee)'
-__version__ = '0.001'
+#global __name__, __author__, __email__, __version__, __license__
+__program_name__ = 'Got Your Back: Gmail Backup'
+__author__ = 'Jay Lee'
+__email__ = 'jay@jhltechservices.com'
+__version__ = '0.02 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
 
 import imaplib
@@ -39,11 +42,14 @@ import sqlite3
 import email
 import re
 import shlex
+import urlparse
 
 import atom.http_core
+import gdata
 import gdata.gauth
 import gdata.service
 import gdata.auth
+import gdata.apps.service
 
 import gimaplib
 
@@ -68,6 +74,10 @@ def SetupOptionParser():
     action='store_true',
     dest='version',
     help='just print GYB Version and then quit')
+  parser.add_option('-d', '--debug',
+    action='store_true',
+    dest='debug',
+    help='Turn on verbose debugging and connection information (for troubleshooting purposes only)')
   return parser
 
 def getProgPath():
@@ -88,10 +98,12 @@ def getOAuthFromConfigFile(email):
   else:
     return (False, False)
 
-def requestOAuthAccess(email):
+def requestOAuthAccess(email, debug=False):
   domain = email[email.find('@')+1:]
-  scopes = ['https://mail.google.com/']
+  scopes = ['https://mail.google.com/',                        # IMAP/SMTP client access
+            'https://www.googleapis.com/auth/userinfo#email']  # Email address access (verify token authorized by correct account
   s = gdata.service.GDataService()
+  s.debug = debug
   s.source = 'GotYourBack %s / %s / ' % (__version__,
                    'Python %s.%s.%s %s' % (sys.version_info[0], 
                    sys.version_info[1], sys.version_info[2], sys.version_info[3]))
@@ -183,9 +195,25 @@ def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):
     sqlresults = sqlcur.fetchall()
     for x in sqlresults:
       filename = x[0]
-      if os.path.isfile(filename):
+      if os.path.isfile(os.path.join(backup_folder, filename)):
         return True
     return False
+
+def doesTokenMatchEmail(cli_email, key, secret, debug=False):
+  s = gdata.apps.service.AppsService(source=__program_name__+' '+__version__)
+  s.debug = debug
+  s.SetOAuthInputParameters(gdata.auth.OAuthSignatureMethod.HMAC_SHA1, consumer_key='anonymous', consumer_secret='anonymous')
+  oauth_input_params = gdata.auth.OAuthInputParams(gdata.auth.OAuthSignatureMethod.HMAC_SHA1, consumer_key='anonymous', consumer_secret='anonymous')
+  #oauth_token = gdata.auth.OAuthToken(key=key, secret=secret, oauth_input_parameters=oauth_input_parameters)
+  s.SetOAuthToken(gdata.auth.OAuthToken(key=key, secret=secret, oauth_input_params=oauth_input_params))
+  server_response = s.request('GET', 'https://www.googleapis.com/userinfo/email')
+  result_body = server_response.read()
+  if server_response.status == 200:
+    param_dict = urlparse.parse_qs(result_body)
+    authed_email = param_dict['email'][0]
+    if authed_email.lower() == cli_email.lower():
+      return True
+  return False
 
 def main(argv):
   options_parser = SetupOptionParser()
@@ -199,8 +227,13 @@ def main(argv):
     return
   key, secret = getOAuthFromConfigFile(options.email)
   if not key:
-    key, secret = requestOAuthAccess(options.email)
-  imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email)) # dynamically generate the xoauth_string since they expire after 10 minutes
+    key, secret = requestOAuthAccess(options.email, options.debug)
+  if not doesTokenMatchEmail(options.email, key, secret, options.debug):
+    print "Error: you did not authorize the OAuth token in the browser with the %s Google Account. Please make sure you are logged in to the correct account when authorizing the token in the browser." % options.email
+    cfgFile = '%s%s.cfg' % (getProgPath(), options.email)
+    os.remove(cfgFile)
+    exit(9)
+  imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug) # dynamically generate the xoauth_string since they expire after 10 minutes
   if not os.path.isdir(options.folder):
     if options.action == 'backup':
       os.mkdir(options.folder)
@@ -229,7 +262,7 @@ def main(argv):
     backup_count = len(messages_to_backup)
     current = 1
     for message_num in messages_to_backup:
-      print "backing up message %s of %s" % (current, backup_count) 
+      print "backing up message %s of %s (num: %s)" % (current, backup_count, message_num) 
       #Save message content
       while True:
         try:
@@ -240,10 +273,12 @@ def main(argv):
           break
         except imaplib.IMAP4.abort:
           print 'imaplib.abort error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email))
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
+          imapconn.select('[Gmail]/All Mail', readonly=True)
         except socket.error:
           print 'socket.error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email))
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
+          imapconn.select('[Gmail]/All Mail', readonly=True)
       labels_string = full_message_data[0][0]
       labels = shlex.split(re.search('^[0-9]* \(X-GM-LABELS \((.*)\)', labels_string).group(1).replace('\\', '\\\\'))
       full_message = full_message_data[0][1]
@@ -318,11 +353,11 @@ def main(argv):
           break
         except imaplib.IMAP4.abort:
           print 'imaplib.abort error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email))
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
           imapconn.select('[Gmail]/All Mail')
         except socket.error:
           print 'socket.error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email))
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
           imapconn.select('[Gmail]/All Mail')
       current = current + 1
   sqlconn.close()

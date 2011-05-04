@@ -5,6 +5,7 @@ import re
 import shlex
 import sys
 
+import gyb
 
 maxRead = 1000000
 class MySSL (imaplib.IMAP4_SSL):
@@ -60,15 +61,16 @@ def GImapSendID(imapconn, name, version, vendor, contact):
     raise GImapSendIDError('GImap Send ID failed to send ID: %s' % t)
   return shlex.split(d[0][1:-1])
 
-def ImapConnect(xoauth_string):
+def ImapConnect(xoauth_string, debug):
   #imap_conn = imaplib.IMAP4_SSL('imap.gmail.com')
   imap_conn = MySSL('imap.gmail.com')
-  imap_conn.debug = 0
+  if debug:
+    imap_conn.debug = 4
   imap_conn.authenticate('XOAUTH', lambda x: xoauth_string)
   if not GImapHasExtensions(imap_conn):
     print "This server does not support the Gmail IMAP Extensions."
     sys.exit(1)
-  GImapSendID(imap_conn, 'Jay Test IMAP Client', '0.000001', 'jhltechservices.com', 'support@jhltechservices.com')
+  GImapSendID(imap_conn, gyb.__program_name__, gyb.__version__, gyb.__author__, gyb.__email__)
   return imap_conn
 
 def GImapSearch(imapconn, gmail_search):
