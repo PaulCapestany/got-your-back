@@ -186,7 +186,7 @@ def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):
       sqlcur.execute('SELECT message_filename FROM messages where message_num = \'%s\'' % (message_num))
     except sqlite3.OperationalError, e:
       if e.message == 'no such table: messages':
-        print "no messages table... creating one now..."
+        #print "no messages table... creating one now..."
         sqlcur.execute('CREATE TABLE messages (message_num INTEGER PRIMARY KEY, message_filename TEXT, message_to TEXT, message_from TEXT, message_subject TEXT, message_internaldate TEXT)')
         sqlcur.execute('CREATE TABLE labels (message_num INTEGER, label TEXT)')
         sqlcur.execute('CREATE TABLE flags (message_num INTEGER, flag TEXT)')
@@ -242,6 +242,7 @@ def main(argv):
       exit(3)
   sqldbfile = os.path.join(options.folder, 'msg-db.sqlite')
   sqlconn = sqlite3.connect(sqldbfile)
+  sqlconn.text_factory = str
   sqlcur = sqlconn.cursor()
   if options.action == 'backup':
     imapconn.select('[Gmail]/All Mail', readonly=True)
