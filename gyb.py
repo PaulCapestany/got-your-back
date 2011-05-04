@@ -117,7 +117,7 @@ def requestOAuthAccess(email, debug=False):
       exit(5)
     else:
       print 'Error: %s' % e
-  if domain.lower() != 'gmail.com':
+  if domain.lower() != 'gmail.com' and domain.lower() != 'googlemail.com':
     url_params = {'hd': domain}
   else:
     url_params = {}
@@ -244,8 +244,17 @@ def main(argv):
   sqlconn = sqlite3.connect(sqldbfile)
   sqlconn.text_factory = str
   sqlcur = sqlconn.cursor()
+  global ALL_MAIL
+  ALL_MAIL = '[Gmail]/All Mail'
+  r, d = imapconn.select(ALL_MAIL, readonly=True)
+  if r == 'NO':
+    ALL_MAIL = '[Google Mail]/All Mail'
+    r, d = imapconn.select(ALL_MAIL, readonly=True)
+    if r == 'NO':
+      print "Error: Cannot select the Gmail \"All Mail\" folder. Please make sure it is not hidden from IMAP."
+      exit(3)
   if options.action == 'backup':
-    imapconn.select('[Gmail]/All Mail', readonly=True)
+    imapconn.select(ALL_MAIL, readonly=True)
     messages_to_process = getMessagesToBackupList(imapconn, options.gmail_search)
     backup_path = options.folder
     if not os.path.isdir(backup_path):
@@ -275,11 +284,11 @@ def main(argv):
         except imaplib.IMAP4.abort:
           print 'imaplib.abort error, retrying...'
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
-          imapconn.select('[Gmail]/All Mail', readonly=True)
+          imapconn.select(ALL_MAIL, readonly=True)
         except socket.error:
           print 'socket.error, retrying...'
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
-          imapconn.select('[Gmail]/All Mail', readonly=True)
+          imapconn.select(ALL_MAIL, readonly=True)
       labels_string = full_message_data[0][0]
       labels = shlex.split(re.search('^[0-9]* \(X-GM-LABELS \((.*)\)', labels_string).group(1).replace('\\', '\\\\'))
       full_message = full_message_data[0][1]
@@ -309,7 +318,7 @@ def main(argv):
       sqlconn.commit()
       current = current + 1
   elif options.action == 'restore':
-    imapconn.select('[Gmail]/All Mail')  # read/write!
+    imapconn.select(ALL_MAIL)  # read/write!
     messages_to_restore = sqlcur.execute('SELECT message_num, message_internaldate, message_filename FROM messages') # All messages
     messages_to_restore_results = sqlcur.fetchall()
     restore_count = len(messages_to_restore_results)
@@ -340,7 +349,7 @@ def main(argv):
       flags_string = ' '.join(flags)
       while True:
         try:
-          r, d = imapconn.append('[Gmail]/All Mail', flags_string, imaplib.Internaldate2tuple(message_internaldate), full_message)
+          r, d = imapconn.append(ALL_MAIL, flags_string, imaplib.Internaldate2tuple(message_internaldate), full_message)
           if r != 'OK':
             print 'Error: %s' % r
             exit(5)
@@ -355,11 +364,11 @@ def main(argv):
         except imaplib.IMAP4.abort:
           print 'imaplib.abort error, retrying...'
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
-          imapconn.select('[Gmail]/All Mail')
+          imapconn.select(ALL_MAIL)
         except socket.error:
           print 'socket.error, retrying...'
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
-          imapconn.select('[Gmail]/All Mail')
+          imapconn.select(ALL_MAIL)
       current = current + 1
   sqlconn.close()
   imapconn.logout()
