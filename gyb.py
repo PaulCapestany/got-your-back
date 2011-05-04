@@ -276,7 +276,7 @@ def main(argv):
       #Save message content
       while True:
         try:
-          r, full_message_data = imapconn.uid('FETCH', message_num, '(X-GM-LABELS RFC822 INTERNALDATE FLAGS)')
+          r, full_message_data = imapconn.uid('FETCH', message_num, '(X-GM-LABELS INTERNALDATE FLAGS BODY.PEEK[])')
           if r != 'OK':
             print 'Error: %s' % r
             exit(5)
@@ -289,13 +289,13 @@ def main(argv):
           print 'socket.error, retrying...'
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
           imapconn.select(ALL_MAIL, readonly=True)
-      labels_string = full_message_data[0][0]
-      labels = shlex.split(re.search('^[0-9]* \(X-GM-LABELS \((.*)\)', labels_string).group(1).replace('\\', '\\\\'))
+      
       full_message = full_message_data[0][1]
-      message_date_and_flags_string = full_message_data[1]
-      search_results = re.search('^ (INTERNALDATE \".*\") (FLAGS \(.*\))\)', message_date_and_flags_string)
-      message_date_string = search_results.group(1)
-      message_flags_string = search_results.group(2)
+      everything_else_string = full_message_data[0][0]
+      search_results = re.search('^[0-9]* \(X-GM-LABELS \((.*)\) UID [0-9]* (INTERNALDATE \".*\") (FLAGS \(.*\))', everything_else_string)
+      labels = shlex.split(search_results.group(1).replace('\\', '\\\\'))
+      message_date_string = search_results.group(2)
+      message_flags_string = search_results.group(3)
       message_date = imaplib.Internaldate2tuple(message_date_string)
       message_flags = imaplib.ParseFlags(message_flags_string)
       message_rel_filename = os.path.join(str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday), str(message_num)+'.eml')
@@ -340,7 +340,6 @@ def main(argv):
       labels = []
       for l in labels_results:
         labels.append(l[0])
-      flags = ''
       flags_query = sqlcur.execute('SELECT flag FROM flags WHERE message_num = ?', (message_num,))
       flags_results = sqlcur.fetchall()
       flags = []
@@ -354,7 +353,7 @@ def main(argv):
             print 'Error: %s' % r
             exit(5)
           restored_uid = int(re.search('^[APPENDUID [0-9]* ([0-9]*)] \(Success\)$', d[0]).group(1))
-          if len(labels) < 0:
+          if len(labels) > 0:
             labels_string = '("'+'" "'.join(labels)+'")'
             r, d = imapconn.uid('STORE', restored_uid, '+X-GM-LABELS', labels_string)
             if r != 'OK':
