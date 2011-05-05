@@ -78,6 +78,9 @@ def SetupOptionParser():
     action='store_true',
     dest='debug',
     help='Turn on verbose debugging and connection information (for troubleshooting purposes only)')
+  parser.add_option('-l', '--label-restored',
+    dest='label_restored',
+    help='Optional: Used on restore only. If specified, all restored messages will recieve this label. For example, -l "3-21-11 Restore" will label all uploaded messages with that label.')
   return parser
 
 def getProgPath():
@@ -340,6 +343,8 @@ def main(argv):
       labels = []
       for l in labels_results:
         labels.append(l[0])
+      if options.label_restored:
+        labels.append(options.label_restored)
       flags_query = sqlcur.execute('SELECT flag FROM flags WHERE message_num = ?', (message_num,))
       flags_results = sqlcur.fetchall()
       flags = []
