@@ -248,10 +248,12 @@ def main(argv):
   sqlconn.text_factory = str
   sqlcur = sqlconn.cursor()
   global ALL_MAIL
-  ALL_MAIL = '[Gmail]/All Mail'
+  ALL_MAIL = gimaplib.GImapGetFolder(imapconn)
+  #TRASH = gimaplib.GImapGetFolder(imapconn, '\Trash')
+  #SPAM = gimaplib.GImapGetFolder(imapconn, '\Spam')
   r, d = imapconn.select(ALL_MAIL, readonly=True)
   if r == 'NO':
-    ALL_MAIL = '[Google Mail]/All Mail'
+    ALL_MAIL = '[Gmail]/All Mail'
     r, d = imapconn.select(ALL_MAIL, readonly=True)
     if r == 'NO':
       print "Error: Cannot select the Gmail \"All Mail\" folder. Please make sure it is not hidden from IMAP."
