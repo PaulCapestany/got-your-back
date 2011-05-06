@@ -4,26 +4,37 @@ import imaplib
 import re
 import shlex
 import sys
+import cStringIO
 
 import gyb
 
 maxRead = 1000000
 class MySSL (imaplib.IMAP4_SSL):
-  def read (self, n):
-    #print "..Attempting to read %d bytes" % n
-      if n <= maxRead:
-        return imaplib.IMAP4_SSL.read (self, n)
-      else:
-        soFar = 0
-        result = ""
-        while soFar < n:
-          thisFragmentSize = min(maxRead, n-soFar)
-          #print "..Reading fragment size %s" % thisFragmentSize
-          fragment =\
-            imaplib.IMAP4_SSL.read (self, thisFragmentSize)
-          result += fragment
-          soFar += thisFragmentSize # only a few, so not a tragic o/head
-        return result
+  def read(self, size):
+    """Read 'size' bytes from remote."""
+    # sslobj.read() sometimes returns < size bytes
+    chunks = cStringIO.StringIO()
+    read = 0
+    while read < size:
+      data = self.sslobj.read(min(size-read, 16384))
+      read += len(data)
+      #chunks.append(data)
+      chunks.write(data)
+    #return ''.join(chunks)
+    chunks.seek(0)
+    return chunks.read()
+
+  def readline(self):
+    """Read line from remote."""
+    line = cStringIO.StringIO()
+    while 1:
+      char = self.sslobj.read(1)
+      #line.append(char)
+      line.write(char)
+      #if char in ("\n", ""): return ''.join(line)
+      if char in ("\n", ""):
+        line.seek(0)
+        return line.read()
 
 def GImapHasExtensions(imapconn):
   '''
@@ -65,7 +76,7 @@ def ImapConnect(xoauth_string, debug):
   #imap_conn = imaplib.IMAP4_SSL('imap.gmail.com')
   imap_conn = MySSL('imap.gmail.com')
   if debug:
-    imap_conn.debug = 4
+    imap_conn.debug = 100
   imap_conn.authenticate('XOAUTH', lambda x: xoauth_string)
   if not GImapHasExtensions(imap_conn):
     print "This server does not support the Gmail IMAP Extensions."

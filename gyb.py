@@ -25,6 +25,7 @@ __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
 __version__ = '0.03 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
+__db_schema_version__ = '2'
 
 import imaplib
 from optparse import OptionParser
@@ -66,9 +67,10 @@ def SetupOptionParser():
   parser.add_option('-f', '--folder',
     dest='folder',
 	  help='Optional: Folder to use for backup or restore. Default is ./gmail-backup/',
-	  default= 'gmail-backup')
+	  default='XXXuse-email-addessXXX')
   parser.add_option('-s', '--search',
     dest='gmail_search',
+    default='in:anywhere',
     help='Optional: Gmail search to perform, matching messages are backed up. Text like *7d* will be replaced by the date 7 days ago. For example, -s "after:*3d*" would search for "after:%s".' % (datetime.datetime.now() - datetime.timedelta(3)).strftime('%Y/%m/%d'))
   parser.add_option('-v', '--version',
     action='store_true',
@@ -152,49 +154,36 @@ def generateXOAuthString(token, secret, email):
         nonce=nonce, version='1.0', next=None, token=token, token_secret=secret)
   return '''GET https://mail.google.com/mail/b/%s/imap/ oauth_consumer_key="anonymous",oauth_nonce="%s",oauth_signature="%s",oauth_signature_method="HMAC-SHA1",oauth_timestamp="%s",oauth_token="%s",oauth_version="1.0"''' % (email, nonce, urllib.quote(signature), timestamp, urllib.quote(token, safe=''))
 
-def getMessagesToBackupList(imapconn, gmail_search=None):
-  if gmail_search != None:
-    if gmail_search.find('*'):
-      search_parts = gmail_search.split('*')
-      gmail_search = ''
-      for search_part in search_parts:
-        try:
-          value = int(search_part[:-1])
-          time_unit = search_part[-1:]
-          if time_unit == 'd':
-            days = value
-          elif time_unit == 'w':
-            days = value * 7
-          elif time_unit == 'm':
-            days = value * 30
-          elif time_unit == 'y':
-            days = value * 365
-          date = (datetime.datetime.now() - datetime.timedelta(days)).strftime('%Y/%m/%d')
-          gmail_search = gmail_search + date
-        except ValueError:
-          gmail_search = gmail_search+search_part
-          continue
-    messages_to_backup = gimaplib.GImapSearch(imapconn, gmail_search)
-  else:
-    #We'll just do an IMAP Search for all mail
-    t, d = imapconn.uid('SEARCH', 'ALL')
-    if t != 'OK':
-      print 'Problem getting all mail!'
-      sys.exit(1)
-    messages_to_backup = d[0].split()
-  return messages_to_backup
+def getMessagesToBackupList(imapconn, gmail_search='in:anywhere'):
+  if gmail_search.find('*'):
+    search_parts = gmail_search.split('*')
+    gmail_search = ''
+    for search_part in search_parts:
+      try:
+        value = int(search_part[:-1])
+        time_unit = search_part[-1:]
+        if time_unit == 'd':
+          days = value
+        elif time_unit == 'w':
+          days = value * 7
+        elif time_unit == 'm':
+          days = value * 30
+        elif time_unit == 'y':
+          days = value * 365
+        date = (datetime.datetime.now() - datetime.timedelta(days)).strftime('%Y/%m/%d')
+        gmail_search = gmail_search + date
+      except ValueError:
+        gmail_search = gmail_search+search_part
+        continue
+  return gimaplib.GImapSearch(imapconn, gmail_search)
 
 def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):
     try:
       sqlcur.execute('SELECT message_filename FROM messages where message_num = \'%s\'' % (message_num))
     except sqlite3.OperationalError, e:
       if e.message == 'no such table: messages':
-        #print "no messages table... creating one now..."
-        sqlcur.execute('CREATE TABLE messages (message_num INTEGER PRIMARY KEY, message_filename TEXT, message_to TEXT, message_from TEXT, message_subject TEXT, message_internaldate TEXT)')
-        sqlcur.execute('CREATE TABLE labels (message_num INTEGER, label TEXT)')
-        sqlcur.execute('CREATE TABLE flags (message_num INTEGER, flag TEXT)')
-        sqlconn.commit()
-        return False
+        print "\n\nError: your backup database file appears to be corrupted."
+        sys.exit(8)
     sqlresults = sqlcur.fetchall()
     for x in sqlresults:
       filename = x[0]
@@ -202,6 +191,27 @@ def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):
         return True
     return False
 
+def check_db_settings(sqlcur, sqlconn, action, user_email_address):
+  try:
+    sqlcur.execute('SELECT value FROM settings WHERE name = \'db_version\'')
+    db_version = str(sqlcur.fetchone()[0])
+    sqlcur.execute('SELECT value FROM settings WHERE name = \'email_address\'')
+    db_email_address = str(sqlcur.fetchone()[0])
+    
+    if db_version != __db_schema_version__:
+      print "\n\nSorry, this backup folder is only compatible with version %s of the database schema while GYB %s is only compatible with version %s" % (db_version, __version__, __db_schema_version__)
+      sys.exit(4)
+    
+    # Only restores are allowed to use a backup folder started with another account (can't allow 2 Google Accounts to backup/estimate from same folder)
+    if action != 'restore':
+      if user_email_address.lower() != db_email_address.lower():
+        print "\n\nSorry, this backup folder should only be used with the %s account that it was created with for incremental backups. You specified the %s account" % (db_email_address, user_email_address)
+        sys.exit(5)
+  except sqlite3.OperationalError, e:
+    if e.message == 'no such table: settings':
+      print "\n\nSorry, this version of GYB requires version %s of the database schema. Your backup folder database does not have a version." % (__db_schema_version__)
+      sys.exit(6)
+        
 def doesTokenMatchEmail(cli_email, key, secret, debug=False):
   s = gdata.apps.service.AppsService(source=__program_name__+' '+__version__)
   s.debug = debug
@@ -218,6 +228,35 @@ def doesTokenMatchEmail(cli_email, key, secret, debug=False):
       return True
   return False
 
+def restart_line():
+  sys.stdout.write('\r')
+  sys.stdout.flush()
+
+def initializeDB(sqlcur, sqlconn, email):
+  sqlcur.execute('CREATE TABLE messages (message_num INTEGER PRIMARY KEY, message_filename TEXT, message_to TEXT, message_from TEXT, message_subject TEXT, message_internaldate TIMESTAMP)')
+  sqlcur.execute('CREATE TABLE labels (message_num INTEGER, label TEXT)')
+  sqlcur.execute('CREATE TABLE flags (message_num INTEGER, flag TEXT)')
+  sqlcur.execute('CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT)')
+  sqlconn.commit()
+  sqlcur.execute('INSERT INTO settings (name, value) VALUES (\'email_address\', ?)', [email])
+  sqlcur.execute('INSERT INTO settings (name, value) VALUES (\'db_version\', ?)', [__db_schema_version__])
+  sqlconn.commit()
+
+def get_message_size(imapconn, uids):
+  if type(uids) == type(int()):
+    uid_string == str(uid)
+  elif type(uids) == type(list()):
+    uid_string = ','.join(uids)
+  t, d = imapconn.uid('FETCH', uid_string, '(RFC822.SIZE)')
+  if t != 'OK':
+    print "Failed to retrieve size for message %s" % uid
+    exit(9)
+  total_size = 0
+  for x in d:
+    message_size = int(re.search('^[0-9]* \(UID [0-9]* RFC822.SIZE ([0-9]*)\)$', x).group(1))
+    total_size = total_size + message_size
+  return total_size
+  
 def main(argv):
   options_parser = SetupOptionParser()
   (options, args) = options_parser.parse_args()
@@ -228,6 +267,9 @@ def main(argv):
     options_parser.print_help()
     print "ERROR: --email or -e is required."
     return
+  if options.folder == 'XXXuse-email-addessXXX':
+    options.folder = "GYB-GMail-Backup-%s" % options.email
+  print "\nUsing backup folder %s" % options.folder
   key, secret = getOAuthFromConfigFile(options.email)
   if not key:
     key, secret = requestOAuthAccess(options.email, options.debug)
@@ -240,24 +282,32 @@ def main(argv):
   if not os.path.isdir(options.folder):
     if options.action == 'backup':
       os.mkdir(options.folder)
-    else:
+    elif options.action == 'restore':
       print 'Error: Folder %s does not exist. Cannot restore.' % options.folder
       sys.exit(3)
   sqldbfile = os.path.join(options.folder, 'msg-db.sqlite')
-  sqlconn = sqlite3.connect(sqldbfile)
-  sqlconn.text_factory = str
-  sqlcur = sqlconn.cursor()
+  # Do we need to initialize a new database?
+  newDB = (not os.path.isfile(sqldbfile)) and (options.action == 'backup')
+  
+  #If we're not doing a estimate or if the db file actually exists we open it (creates db if it doesn't exist)
+  if options.action != 'estimate' or os.path.isfile(sqldbfile):
+    sqlconn = sqlite3.connect(sqldbfile, detect_types=sqlite3.PARSE_DECLTYPES)
+    sqlconn.text_factory = str
+    sqlcur = sqlconn.cursor()
+    if newDB:
+      initializeDB(sqlcur, sqlconn, options.email)
+    check_db_settings(sqlcur, sqlconn, options.action, options.email)
   global ALL_MAIL
   ALL_MAIL = gimaplib.GImapGetFolder(imapconn)
-  #TRASH = gimaplib.GImapGetFolder(imapconn, '\Trash')
-  #SPAM = gimaplib.GImapGetFolder(imapconn, '\Spam')
+  if ALL_MAIL == None:
+    # Last ditched best guess but All Mail is probably hidden from IMAP...
+    ALL_MAIL = '[Gmail]/All Mail'
   r, d = imapconn.select(ALL_MAIL, readonly=True)
   if r == 'NO':
-    ALL_MAIL = '[Gmail]/All Mail'
-    r, d = imapconn.select(ALL_MAIL, readonly=True)
-    if r == 'NO':
-      print "Error: Cannot select the Gmail \"All Mail\" folder. Please make sure it is not hidden from IMAP."
-      sys.exit(3)
+    print "Error: Cannot select the Gmail \"All Mail\" folder. Please make sure it is not hidden from IMAP."
+    sys.exit(3)
+  
+  # BACKUP #
   if options.action == 'backup':
     imapconn.select(ALL_MAIL, readonly=True)
     messages_to_process = getMessagesToBackupList(imapconn, options.gmail_search)
@@ -265,9 +315,13 @@ def main(argv):
     if not os.path.isdir(backup_path):
       os.mkdir(backup_path)
     messages_to_backup = []
-    #Determine which messages from the search (or all messages) we haven't processed before.
+    #Determine which messages from the search we haven't processed before.
     print "GYB needs to examine %s messages" % len(messages_to_process)
     for message_num in messages_to_process:
+      if newDB:
+        # short circuit the db and filesystem checks to save unnecessary DB and Disk IO
+        messages_to_backup.append(message_num)
+        continue
       if message_is_backed_up(message_num, sqlcur, sqlconn, options.folder):
         continue
       else:
@@ -277,7 +331,9 @@ def main(argv):
     backup_count = len(messages_to_backup)
     current = 1
     for message_num in messages_to_backup:
-      print "backing up message %s of %s (num: %s)" % (current, backup_count, message_num) 
+      restart_line()
+      sys.stdout.write("backing up message %s of %s (num: %s)" % (current, backup_count, message_num))
+      sys.stdout.flush()
       #Save message content
       while True:
         try:
@@ -302,6 +358,8 @@ def main(argv):
       message_date_string = search_results.group(2)
       message_flags_string = search_results.group(3)
       message_date = imaplib.Internaldate2tuple(message_date_string)
+      time_seconds_since_epoch = time.mktime(message_date)
+      message_internal_datetime = datetime.datetime.fromtimestamp(time_seconds_since_epoch)
       message_flags = imaplib.ParseFlags(message_flags_string)
       message_rel_filename = os.path.join(str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday), str(message_num)+'.eml')
       message_full_path = os.path.join(options.folder, str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday))
@@ -315,13 +373,15 @@ def main(argv):
       message_from = m.get('from')
       message_to = m.get('to')
       message_subj = m.get('subject')
-      sqlcur.execute("INSERT INTO messages (message_num, message_filename, message_to, message_from, message_subject, message_internaldate) VALUES (?, ?, ?, ?, ?, ?)", (message_num, message_rel_filename, message_to, message_from, message_subj, message_date_string))
+      sqlcur.execute("INSERT INTO messages (message_num, message_filename, message_to, message_from, message_subject, message_internaldate) VALUES (?, ?, ?, ?, ?, ?)", (message_num, message_rel_filename, message_to, message_from, message_subj, message_internal_datetime))
       for label in labels:
         sqlcur.execute("INSERT INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
       for flag in message_flags:
         sqlcur.execute("INSERT INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
       sqlconn.commit()
       current = current + 1
+  
+  # RESTORE #
   elif options.action == 'restore':
     imapconn.select(ALL_MAIL)  # read/write!
     messages_to_restore = sqlcur.execute('SELECT message_num, message_internaldate, message_filename FROM messages') # All messages
@@ -329,9 +389,12 @@ def main(argv):
     restore_count = len(messages_to_restore_results)
     current = 1
     for x in messages_to_restore_results:
-      print "restoring message %s of %s" % (current, restore_count)
+      restart_line()
+      sys.stdout.write("restoring message %s of %s" % (current, restore_count))
+      sys.stdout.flush()
       message_num = x[0]
       message_internaldate = x[1]
+      message_internaldate_seconds = time.mktime(message_internaldate.timetuple())
       message_filename = x[2]
       if not os.path.isfile(os.path.join(options.folder, message_filename)):
         print 'WARNING! file %s does not exist for message %s' % (os.path.join(options.folder, message_filename), message_num)
@@ -355,7 +418,7 @@ def main(argv):
       flags_string = ' '.join(flags)
       while True:
         try:
-          r, d = imapconn.append(ALL_MAIL, flags_string, imaplib.Internaldate2tuple(message_internaldate), full_message)
+          r, d = imapconn.append(ALL_MAIL, flags_string, message_internaldate_seconds, full_message)
           if r != 'OK':
             print 'Error: %s' % r
             sys.exit(5)
@@ -376,7 +439,68 @@ def main(argv):
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
           imapconn.select(ALL_MAIL)
       current = current + 1
-  sqlconn.close()
+  
+  # ESTIMATE #
+  elif options.action == 'estimate':
+    imapconn.select(ALL_MAIL, readonly=True)
+    messages_to_process = getMessagesToBackupList(imapconn, options.gmail_search)
+    messages_to_estimate = []
+    #if we have a sqlcur , we'll compare messages to the db
+    #otherwise just estimate everything
+    for message_num in messages_to_process:
+      try:
+        sqlcur
+        if message_is_backed_up(message_num, sqlcur, sqlconn, options.folder):
+          continue
+        else:
+          messages_to_estimate.append(message_num)
+      except NameError:
+        messages_to_estimate.append(message_num)
+    estimate_count = len(messages_to_estimate)
+    current = 1
+    size_count = 1
+    total_size = float(0)
+    list_position = 0
+    messages_at_once = 25000
+    print "Messages to estimate: %s" % estimate_count
+    while list_position < len(messages_to_estimate):
+      if (list_position+messages_at_once) < len(messages_to_estimate):
+        working_messages = messages_to_estimate[list_position:list_position+messages_at_once]
+      else:
+        working_messages = messages_to_estimate[list_position:len(messages_to_estimate)-1]
+      list_position = list_position+messages_at_once
+      messages_size = get_message_size(imapconn, working_messages)
+    #for message_num in messages_to_estimate:
+      #print "estimating message %s of %s (num: %s)" % (current, estimate_count, message_num) 
+    #  message_size = int(get_message_size(imapconn, message_num))
+      total_size = total_size + messages_size
+    #  if size_count == 50:
+    #    print "processed %s of %s messages" % (current, estimate_count)
+    #  elif size_count == 100:
+    #    print "processed %s of %s messages" % (current, estimate_count)
+    #    size_count = 0
+      #if total_size > 1073741824:
+      #  math_size = total_size/1073741824
+      #  print_size = "%.2fG" % math_size
+      if total_size > 1048576:
+        math_size = total_size/1048576
+        print_size = "%.2fM" % math_size
+      elif total_size > 1024:
+        math_size = total_size/1024
+        print_size = "%.2fK" % math_size
+      else:
+	    print_size = "%.2fb" % total_size
+      restart_line()
+      sys.stdout.write('                                                            ')
+      restart_line()
+      sys.stdout.write("Messages Estimated: %s  Estimated Size: %s" % (list_position, print_size))
+      sys.stdout.flush()
+    #  current = current + 1
+    #  size_count = size_count + 1
+  try:
+    sqlconn.close()
+  except NameError:
+    pass
   imapconn.logout()
   
 if __name__ == '__main__':
