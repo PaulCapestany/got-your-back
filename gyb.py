@@ -44,6 +44,7 @@ import email
 import re
 import shlex
 import urlparse
+from itertools import islice, chain
 
 import atom.http_core
 import gdata
@@ -91,6 +92,12 @@ def getProgPath():
   else:
     divider = '\\'
   return os.path.dirname(os.path.realpath(sys.argv[0]))+divider
+
+def batch(iterable, size):
+  sourceiter = iter(iterable)
+  while True:
+    batchiter = islice(sourceiter, size)
+    yield chain([batchiter.next()], batchiter)
 
 def getOAuthFromConfigFile(email):
   cfgFile = '%s%s.cfg' % (getProgPath(), email)
@@ -269,7 +276,6 @@ def main(argv):
     return
   if options.folder == 'XXXuse-email-addessXXX':
     options.folder = "GYB-GMail-Backup-%s" % options.email
-  print "\nUsing backup folder %s" % options.folder
   key, secret = getOAuthFromConfigFile(options.email)
   if not key:
     key, secret = requestOAuthAccess(options.email, options.debug)
@@ -291,6 +297,7 @@ def main(argv):
   
   #If we're not doing a estimate or if the db file actually exists we open it (creates db if it doesn't exist)
   if options.action != 'estimate' or os.path.isfile(sqldbfile):
+    print "\nUsing backup folder %s" % options.folder
     sqlconn = sqlite3.connect(sqldbfile, detect_types=sqlite3.PARSE_DECLTYPES)
     sqlconn.text_factory = str
     sqlcur = sqlconn.cursor()
@@ -327,19 +334,18 @@ def main(argv):
       else:
         messages_to_backup.append(message_num)
     print "GYB already has a backup of %s messages" % (len(messages_to_process) - len(messages_to_backup))
-    print "GYB needs to backup %s messages" % len(messages_to_backup)
     backup_count = len(messages_to_backup)
-    current = 1
-    for message_num in messages_to_backup:
-      restart_line()
-      sys.stdout.write("backing up message %s of %s (num: %s)" % (current, backup_count, message_num))
-      sys.stdout.flush()
+    print "GYB needs to backup %s messages" % backup_count
+    messages_at_once = 100
+    backed_up_messages = 0
+    for working_messages in batch(messages_to_backup, messages_at_once):
       #Save message content
+      batch_string = ','.join(working_messages)
       while True:
         try:
-          r, full_message_data = imapconn.uid('FETCH', message_num, '(X-GM-LABELS INTERNALDATE FLAGS BODY.PEEK[])')
+          r, d = imapconn.uid('FETCH', batch_string, '(X-GM-LABELS INTERNALDATE FLAGS BODY.PEEK[])')
           if r != 'OK':
-            print 'Error: %s' % r
+            print 'Error: %s %s' % r, d
             sys.exit(5)
           break
         except imaplib.IMAP4.abort:
@@ -350,36 +356,51 @@ def main(argv):
           print 'socket.error, retrying...'
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
           imapconn.select(ALL_MAIL, readonly=True)
-      
-      full_message = full_message_data[0][1]
-      everything_else_string = full_message_data[0][0]
-      search_results = re.search('^[0-9]* \(X-GM-LABELS \((.*)\) UID [0-9]* (INTERNALDATE \".*\") (FLAGS \(.*\))', everything_else_string)
-      labels = shlex.split(search_results.group(1).replace('\\', '\\\\'))
-      message_date_string = search_results.group(2)
-      message_flags_string = search_results.group(3)
-      message_date = imaplib.Internaldate2tuple(message_date_string)
-      time_seconds_since_epoch = time.mktime(message_date)
-      message_internal_datetime = datetime.datetime.fromtimestamp(time_seconds_since_epoch)
-      message_flags = imaplib.ParseFlags(message_flags_string)
-      message_rel_filename = os.path.join(str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday), str(message_num)+'.eml')
-      message_full_path = os.path.join(options.folder, str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday))
-      message_full_filename = os.path.join(options.folder, str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday), str(message_num)+'.eml')
-      if not os.path.isdir(message_full_path):
-        os.makedirs(message_full_path)
-      f = open(message_full_filename, 'wb')
-      f.write(full_message)
-      f.close()
-      m = email.message_from_string(full_message)
-      message_from = m.get('from')
-      message_to = m.get('to')
-      message_subj = m.get('subject')
-      sqlcur.execute("INSERT INTO messages (message_num, message_filename, message_to, message_from, message_subject, message_internaldate) VALUES (?, ?, ?, ?, ?, ?)", (message_num, message_rel_filename, message_to, message_from, message_subj, message_internal_datetime))
-      for label in labels:
-        sqlcur.execute("INSERT INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
-      for flag in message_flags:
-        sqlcur.execute("INSERT INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
+      for x in d:
+        if x[0] == ')':
+          continue
+        try:
+          full_message = x[1]
+          everything_else_string = x[0]
+        except IndexError:
+          print "skipped '%s'" % x[0]
+          continue
+        search_results = re.search('^[0-9]* \(X-GM-LABELS \((.*)\) UID ([0-9]*) (INTERNALDATE \".*\") (FLAGS \(.*\))', everything_else_string)
+        labels = shlex.split(search_results.group(1).replace('\\', '\\\\'))
+        message_num = search_results.group(2)
+        message_date_string = search_results.group(3)
+        message_flags_string = search_results.group(4)
+        message_date = imaplib.Internaldate2tuple(message_date_string)
+        time_seconds_since_epoch = time.mktime(message_date)
+        message_internal_datetime = datetime.datetime.fromtimestamp(time_seconds_since_epoch)
+        message_flags = imaplib.ParseFlags(message_flags_string)
+        message_rel_filename = os.path.join(str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday), str(message_num)+'.eml')
+        message_full_path = os.path.join(options.folder, str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday))
+        message_full_filename = os.path.join(options.folder, str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday), str(message_num)+'.eml')
+        if not os.path.isdir(message_full_path):
+          os.makedirs(message_full_path)
+        f = open(message_full_filename, 'wb')
+        f.write(full_message)
+        f.close()
+        m = email.message_from_string(full_message)
+        message_from = m.get('from')
+        message_to = m.get('to')
+        message_subj = m.get('subject')
+        sqlcur.execute("INSERT INTO messages (message_num, message_filename, message_to, message_from, message_subject, message_internaldate) VALUES (?, ?, ?, ?, ?, ?)", (message_num, message_rel_filename, message_to, message_from, message_subj, message_internal_datetime))
+        for label in labels:
+          sqlcur.execute("INSERT INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
+        for flag in message_flags:
+          sqlcur.execute("INSERT INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
+
       sqlconn.commit()
-      current = current + 1
+      if backed_up_messages < backup_count:
+        backed_up_messages = backed_up_messages + messages_at_once
+      else:
+        backed_up_messages = backup_count
+      restart_line()
+      sys.stdout.write("backed up %s of %s messages" % (backed_up_messages, backup_count))
+      sys.stdout.flush()
+
   
   # RESTORE #
   elif options.action == 'restore':
@@ -457,31 +478,21 @@ def main(argv):
       except NameError:
         messages_to_estimate.append(message_num)
     estimate_count = len(messages_to_estimate)
-    current = 1
-    size_count = 1
     total_size = float(0)
     list_position = 0
-    messages_at_once = 25000
+    messages_at_once = 10000
+    loop_count = 0
     print "Messages to estimate: %s" % estimate_count
-    while list_position < len(messages_to_estimate):
+    while list_position < len(messages_to_estimate)-1:
+      loop_count = loop_count + 1
       if (list_position+messages_at_once) < len(messages_to_estimate):
-        working_messages = messages_to_estimate[list_position:list_position+messages_at_once]
+        working_messages = messages_to_estimate[list_position:list_position+messages_at_once-1]
+        list_position = list_position+messages_at_once
       else:
         working_messages = messages_to_estimate[list_position:len(messages_to_estimate)-1]
-      list_position = list_position+messages_at_once
+        list_position = len(messages_to_estimate)-1
       messages_size = get_message_size(imapconn, working_messages)
-    #for message_num in messages_to_estimate:
-      #print "estimating message %s of %s (num: %s)" % (current, estimate_count, message_num) 
-    #  message_size = int(get_message_size(imapconn, message_num))
       total_size = total_size + messages_size
-    #  if size_count == 50:
-    #    print "processed %s of %s messages" % (current, estimate_count)
-    #  elif size_count == 100:
-    #    print "processed %s of %s messages" % (current, estimate_count)
-    #    size_count = 0
-      #if total_size > 1073741824:
-      #  math_size = total_size/1073741824
-      #  print_size = "%.2fG" % math_size
       if total_size > 1048576:
         math_size = total_size/1048576
         print_size = "%.2fM" % math_size
@@ -493,10 +504,10 @@ def main(argv):
       restart_line()
       sys.stdout.write('                                                            ')
       restart_line()
-      sys.stdout.write("Messages Estimated: %s  Estimated Size: %s" % (list_position, print_size))
+      sys.stdout.write("Messages estimated: %s  Estimated size: %s" % (loop_count+list_position, print_size))
       sys.stdout.flush()
-    #  current = current + 1
-    #  size_count = size_count + 1
+      time.sleep(1)
+    print ""
   try:
     sqlconn.close()
   except NameError:

@@ -76,7 +76,7 @@ def ImapConnect(xoauth_string, debug):
   #imap_conn = imaplib.IMAP4_SSL('imap.gmail.com')
   imap_conn = MySSL('imap.gmail.com')
   if debug:
-    imap_conn.debug = 100
+    imap_conn.debug = 4
   imap_conn.authenticate('XOAUTH', lambda x: xoauth_string)
   if not GImapHasExtensions(imap_conn):
     print "This server does not support the Gmail IMAP Extensions."
