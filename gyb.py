@@ -375,11 +375,11 @@ def main(argv):
           break
         except imaplib.IMAP4.abort:
           print 'imaplib.abort error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
           imapconn.select(ALL_MAIL, readonly=True)
         except socket.error:
           print 'socket.error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
           imapconn.select(ALL_MAIL, readonly=True)
       for x in d:
         if x[0] == ')':
@@ -478,11 +478,11 @@ def main(argv):
           break
         except imaplib.IMAP4.abort:
           print 'imaplib.abort error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
           imapconn.select(ALL_MAIL)
         except socket.error:
           print 'socket.error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug)
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
           imapconn.select(ALL_MAIL)
       current = current + 1
   
