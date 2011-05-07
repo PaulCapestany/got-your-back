@@ -418,13 +418,14 @@ def main(argv):
           sqlcur.execute("INSERT INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
 
       sqlconn.commit()
-      if backed_up_messages < backup_count:
+      if backed_up_messages+messages_at_once < backup_count:
         backed_up_messages = backed_up_messages + messages_at_once
       else:
         backed_up_messages = backup_count
       restart_line()
       sys.stdout.write("backed up %s of %s messages" % (backed_up_messages, backup_count))
       sys.stdout.flush()
+    print "\n"
 
   
   # RESTORE #
