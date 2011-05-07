@@ -170,7 +170,7 @@ def generateXOAuthString(token, secret, email, two_legged=False):
     signature = gdata.gauth.generate_hmac_signature(
         http_request=request, consumer_key='anonymous', consumer_secret='anonymous', timestamp=timestamp,
         nonce=nonce, version='1.0', next=None, token=token, token_secret=secret)
-    return '''GET https://mail.google.com/mail/b/%s/imap/ oauth_consumer_key="anonymous",oauth_nonce="%s",oauth_signature="%s",oauth_signature_method="HMAC-SHA1",oauth_timestamp="%s",oauth_token="%s",oauth_version="1.0"''' % (email, nonce, urllib.quote(signature), timestamp, urllib.quote(token, safe=''.l))
+    return '''GET https://mail.google.com/mail/b/%s/imap/ oauth_consumer_key="anonymous",oauth_nonce="%s",oauth_signature="%s",oauth_signature_method="HMAC-SHA1",oauth_timestamp="%s",oauth_token="%s",oauth_version="1.0"''' % (email, nonce, urllib.quote(signature), timestamp, urllib.quote(token))
 
 def getMessagesToBackupList(imapconn, gmail_search='in:anywhere'):
   if gmail_search.find('*'):
