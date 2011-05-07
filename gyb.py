@@ -62,9 +62,11 @@ def SetupOptionParser():
     dest='email',
     help='Full email address of user to backup')
   parser.add_option('-a', '--action',
+    type='choice',
+    choices=['backup','restore','estimate'],
     dest='action',
     default='backup',
-    help='Optional: Action to perform, backup (default) or restore')
+    help='Optional: Action to perform. backup, restore or estimate.')
   parser.add_option('-f', '--folder',
     dest='folder',
 	  help='Optional: Folder to use for backup or restore. Default is ./gmail-backup/',
@@ -83,7 +85,10 @@ def SetupOptionParser():
     help='Turn on verbose debugging and connection information (for troubleshooting purposes only)')
   parser.add_option('-l', '--label-restored',
     dest='label_restored',
-    help='Optional: Used on restore only. If specified, all restored messages will recieve this label. For example, -l "3-21-11 Restore" will label all uploaded messages with that label.')
+    help='Optional: Used on restore only. If specified, all restored messages will receive this label. For example, -l "3-21-11 Restore" will label all uploaded messages with that label.')
+  parser.add_option('-t', '--two-legged',
+    dest='two_legged',
+    help='Google Apps Business and Education accounts only. Use administrator two legged OAuth to authenticate as end user.')
   return parser
 
 def getProgPath():
@@ -151,15 +156,21 @@ def requestOAuthAccess(email, debug=False):
   f.close()
   return (final_token.key, final_token.secret)
 
-def generateXOAuthString(token, secret, email):
-  request = atom.http_core.HttpRequest(
-    'https://mail.google.com/mail/b/%s/imap/' % email, 'GET')
+def generateXOAuthString(token, secret, email, two_legged=False):
   nonce = str(random.randrange(2**64 - 1))
   timestamp = str(int(time.time()))
-  signature = gdata.gauth.generate_hmac_signature(
+  if two_legged:
+    request = atom.http_core.HttpRequest('https://mail.google.com/mail/b/%s/imap/?xoauth_requestor_id=%s' % (email, urllib.quote(email)), 'GET')
+    signature = gdata.gauth.generate_hmac_signature(
+        http_request=request, consumer_key=token, consumer_secret=secret, timestamp=timestamp,
+        nonce=nonce, version='1.0', next=None)
+    return '''GET https://mail.google.com/mail/b/%s/imap/?xoauth_requestor_id=%s oauth_consumer_key="%s",oauth_nonce="%s",oauth_signature="%s",oauth_signature_method="HMAC-SHA1",oauth_timestamp="%s",oauth_version="1.0"''' % (email, urllib.quote(email), token, nonce, urllib.quote(signature), timestamp)
+  else:
+    request = atom.http_core.HttpRequest('https://mail.google.com/mail/b/%s/imap/' % email, 'GET')
+    signature = gdata.gauth.generate_hmac_signature(
         http_request=request, consumer_key='anonymous', consumer_secret='anonymous', timestamp=timestamp,
         nonce=nonce, version='1.0', next=None, token=token, token_secret=secret)
-  return '''GET https://mail.google.com/mail/b/%s/imap/ oauth_consumer_key="anonymous",oauth_nonce="%s",oauth_signature="%s",oauth_signature_method="HMAC-SHA1",oauth_timestamp="%s",oauth_token="%s",oauth_version="1.0"''' % (email, nonce, urllib.quote(signature), timestamp, urllib.quote(token, safe=''))
+    return '''GET https://mail.google.com/mail/b/%s/imap/ oauth_consumer_key="anonymous",oauth_nonce="%s",oauth_signature="%s",oauth_signature_method="HMAC-SHA1",oauth_timestamp="%s",oauth_token="%s",oauth_version="1.0"''' % (email, nonce, urllib.quote(signature), timestamp, urllib.quote(token, safe=''.l))
 
 def getMessagesToBackupList(imapconn, gmail_search='in:anywhere'):
   if gmail_search.find('*'):
@@ -276,15 +287,29 @@ def main(argv):
     return
   if options.folder == 'XXXuse-email-addessXXX':
     options.folder = "GYB-GMail-Backup-%s" % options.email
-  key, secret = getOAuthFromConfigFile(options.email)
-  if not key:
-    key, secret = requestOAuthAccess(options.email, options.debug)
-  if not doesTokenMatchEmail(options.email, key, secret, options.debug):
-    print "Error: you did not authorize the OAuth token in the browser with the %s Google Account. Please make sure you are logged in to the correct account when authorizing the token in the browser." % options.email
-    cfgFile = '%s%s.cfg' % (getProgPath(), options.email)
-    os.remove(cfgFile)
-    sys.exit(9)
-  imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email), options.debug) # dynamically generate the xoauth_string since they expire after 10 minutes
+  if options.two_legged:
+    if os.path.isfile(options.two_legged):
+      f = open(options.two_legged, 'r')
+      key = f.readline()[0:-1]
+      secret = f.readline()
+      f.close()
+    else:
+      f = open(options.two_legged, 'w')
+      key = raw_input('Enter your domain\'s OAuth consumer key: ')
+      secret = raw_input('Enter your domain\'s OAuth consumer secret: ')
+      f.write('%s\n%s' % (consumer, secret))
+      f.close()
+    
+  else:
+    key, secret = getOAuthFromConfigFile(options.email)
+    if not key:
+      key, secret = requestOAuthAccess(options.email, options.debug)
+    if not doesTokenMatchEmail(options.email, key, secret, options.debug):
+      print "Error: you did not authorize the OAuth token in the browser with the %s Google Account. Please make sure you are logged in to the correct account when authorizing the token in the browser." % options.email
+      cfgFile = '%s%s.cfg' % (getProgPath(), options.email)
+      os.remove(cfgFile)
+      sys.exit(9)
+  imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug) # dynamically generate the xoauth_string since they expire after 10 minutes
   if not os.path.isdir(options.folder):
     if options.action == 'backup':
       os.mkdir(options.folder)
@@ -345,7 +370,7 @@ def main(argv):
         try:
           r, d = imapconn.uid('FETCH', batch_string, '(X-GM-LABELS INTERNALDATE FLAGS BODY.PEEK[])')
           if r != 'OK':
-            print 'Error: %s %s' % r, d
+            print 'Error: %s %s' % r, batch_string
             sys.exit(5)
           break
         except imaplib.IMAP4.abort:
