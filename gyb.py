@@ -287,7 +287,7 @@ def main(argv):
     return
   if options.folder == 'XXXuse-email-addessXXX':
     options.folder = "GYB-GMail-Backup-%s" % options.email
-  if options.two_legged:
+  if options.two_legged: # 2-Legged OAuth (Admins)
     if os.path.isfile(options.two_legged):
       f = open(options.two_legged, 'r')
       key = f.readline()[0:-1]
@@ -299,8 +299,7 @@ def main(argv):
       secret = raw_input('Enter your domain\'s OAuth consumer secret: ')
       f.write('%s\n%s' % (consumer, secret))
       f.close()
-    
-  else:
+  else:  # 3-Legged OAuth (End Users)
     key, secret = getOAuthFromConfigFile(options.email)
     if not key:
       key, secret = requestOAuthAccess(options.email, options.debug)
@@ -323,6 +322,8 @@ def main(argv):
   #If we're not doing a estimate or if the db file actually exists we open it (creates db if it doesn't exist)
   if options.action != 'estimate' or os.path.isfile(sqldbfile):
     print "\nUsing backup folder %s" % options.folder
+    global sqlconn
+    global sqlcur
     sqlconn = sqlite3.connect(sqldbfile, detect_types=sqlite3.PARSE_DECLTYPES)
     sqlconn.text_factory = str
     sqlcur = sqlconn.cursor()
@@ -541,4 +542,12 @@ def main(argv):
   imapconn.logout()
   
 if __name__ == '__main__':
-  main(sys.argv)
+  try:
+    main(sys.argv)
+  except KeyboardInterrupt:
+    try:
+      sqlconn.commit()
+      sqlconn.close()
+    except NameError:
+      pass
+    sys.exit(4)
