@@ -45,6 +45,7 @@ import re
 import shlex
 import urlparse
 from itertools import islice, chain
+import math
 
 import atom.http_core
 import gdata
@@ -367,12 +368,21 @@ def main(argv):
     for working_messages in batch(messages_to_backup, messages_at_once):
       #Save message content
       batch_string = ','.join(working_messages)
+      bad_count = 0
       while True:
         try:
           r, d = imapconn.uid('FETCH', batch_string, '(X-GM-LABELS INTERNALDATE FLAGS BODY.PEEK[])')
           if r != 'OK':
-            print 'Error: %s %s' % r, batch_string
-            sys.exit(5)
+            bad_count = bad_count + 1
+            if bad_count > 7:
+              print "Error: failed to retrieve messages."
+              sys.exit(5)
+            sleep_time = math.pow(2, bad_count)
+            sys.stdout.write("\nServer responded with %s, will retry in %s seconds" % (r, str(sleep_time))
+            time.sleep(sleep_time) # sleep 2 seconds, then 4, 8, 16, 32, 64, 128
+            imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
+            imapconn.select(ALL_MAIL, readonly=True)
+            continue
           break
         except imaplib.IMAP4.abort:
           print 'imaplib.abort error, retrying...'
