@@ -23,7 +23,7 @@ For more information, see http://code.google.com/p/got-your-back/
 __program_name__ = 'Got Your Back: Gmail Backup'
 __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
-__version__ = '0.06 Alpha'
+__version__ = '0.07 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
 __db_schema_version__ = '2'
 
