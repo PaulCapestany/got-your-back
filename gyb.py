@@ -298,7 +298,7 @@ def main(argv):
       f = open(options.two_legged, 'w')
       key = raw_input('Enter your domain\'s OAuth consumer key: ')
       secret = raw_input('Enter your domain\'s OAuth consumer secret: ')
-      f.write('%s\n%s' % (consumer, secret))
+      f.write('%s\n%s' % (key, secret))
       f.close()
   else:  # 3-Legged OAuth (End Users)
     key, secret = getOAuthFromConfigFile(options.email)
@@ -378,7 +378,7 @@ def main(argv):
               print "Error: failed to retrieve messages."
               sys.exit(5)
             sleep_time = math.pow(2, bad_count)
-            sys.stdout.write("\nServer responded with %s, will retry in %s seconds" % (r, str(sleep_time))
+            sys.stdout.write("\nServer responded with %s, will retry in %s seconds" % (r, str(sleep_time)))
             time.sleep(sleep_time) # sleep 2 seconds, then 4, 8, 16, 32, 64, 128
             imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
             imapconn.select(ALL_MAIL, readonly=True)
