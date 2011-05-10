@@ -264,7 +264,7 @@ def initializeDB(sqlcur, sqlconn, email):
 def get_message_size(imapconn, uids):
   if type(uids) == type(int()):
     uid_string == str(uid)
-  elif type(uids) == type(list()):
+  else:
     uid_string = ','.join(uids)
   t, d = imapconn.uid('FETCH', uid_string, '(RFC822.SIZE)')
   if t != 'OK':
@@ -520,14 +520,8 @@ def main(argv):
     messages_at_once = 10000
     loop_count = 0
     print "Messages to estimate: %s" % estimate_count
-    while list_position < len(messages_to_estimate)-1:
-      loop_count = loop_count + 1
-      if (list_position+messages_at_once) < len(messages_to_estimate):
-        working_messages = messages_to_estimate[list_position:list_position+messages_at_once-1]
-        list_position = list_position+messages_at_once
-      else:
-        working_messages = messages_to_estimate[list_position:len(messages_to_estimate)-1]
-        list_position = len(messages_to_estimate)-1
+    estimated_messages = 0
+    for working_messages in batch(messages_to_estimate, messages_at_once):
       messages_size = get_message_size(imapconn, working_messages)
       total_size = total_size + messages_size
       if total_size > 1048576:
@@ -538,10 +532,12 @@ def main(argv):
         print_size = "%.2fK" % math_size
       else:
 	    print_size = "%.2fb" % total_size
+      if estimated_messages+messages_at_once < estimate_count:
+        estimated_messages = estimated_messages + messages_at_once
+      else:
+        estimated_messages = estimate_count
       restart_line()
-      sys.stdout.write('                                                            ')
-      restart_line()
-      sys.stdout.write("Messages estimated: %s  Estimated size: %s" % (loop_count+list_position, print_size))
+      sys.stdout.write("Messages estimated: %s  Estimated size: %s" % (estimated_messages, print_size))
       sys.stdout.flush()
       time.sleep(1)
     print ""
@@ -560,4 +556,5 @@ if __name__ == '__main__':
       sqlconn.close()
     except NameError:
       pass
+    print ''  # Newline
     sys.exit(4)
