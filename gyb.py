@@ -23,9 +23,10 @@ For more information, see http://code.google.com/p/got-your-back/
 __program_name__ = 'Got Your Back: Gmail Backup'
 __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
-__version__ = '0.08 Alpha'
+__version__ = '0.09 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
-__db_schema_version__ = '2'
+__db_schema_version__ = '3'
+__db_schema_min_version__ = '2'        #Minimum for restore
 
 import imaplib
 from optparse import OptionParser
@@ -84,12 +85,21 @@ def SetupOptionParser():
     action='store_true',
     dest='debug',
     help='Turn on verbose debugging and connection information (for troubleshooting purposes only)')
+  parser.add_option('-B', '--batch-size',
+    dest='batch_size',
+    type='int',
+    default=100,
+    help='Optional: Sets the number of messages to include batch when backing up.')
   parser.add_option('-l', '--label-restored',
     dest='label_restored',
     help='Optional: Used on restore only. If specified, all restored messages will receive this label. For example, -l "3-21-11 Restore" will label all uploaded messages with that label.')
   parser.add_option('-t', '--two-legged',
     dest='two_legged',
     help='Google Apps Business and Education accounts only. Use administrator two legged OAuth to authenticate as end user.')
+  parser.add_option('-C', '--compress',
+    dest='compress',
+    action='store_true',
+    help='Optional: enable compression to reduce bandwidth')
   return parser
 
 def getProgPath():
@@ -198,11 +208,15 @@ def getMessagesToBackupList(imapconn, gmail_search='in:anywhere'):
 
 def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):
     try:
-      sqlcur.execute('SELECT message_filename FROM messages where message_num = \'%s\'' % (message_num))
+      sqlcur.execute('''
+         SELECT message_filename FROM uids NATURAL JOIN messages
+                where uids.uid = ?''', ((message_num),))
     except sqlite3.OperationalError, e:
       if e.message == 'no such table: messages':
         print "\n\nError: your backup database file appears to be corrupted."
-        sys.exit(8)
+      else:
+        print "SQL error:%s" % e
+      sys.exit(8)
     sqlresults = sqlcur.fetchall()
     for x in sqlresults:
       filename = x[0]
@@ -210,26 +224,79 @@ def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):
         return True
     return False
 
-def check_db_settings(sqlcur, sqlconn, action, user_email_address):
+def get_db_settings(sqlcur):
   try:
-    sqlcur.execute('SELECT value FROM settings WHERE name = \'db_version\'')
-    db_version = str(sqlcur.fetchone()[0])
-    sqlcur.execute('SELECT value FROM settings WHERE name = \'email_address\'')
-    db_email_address = str(sqlcur.fetchone()[0])
-    
-    if db_version != __db_schema_version__:
-      print "\n\nSorry, this backup folder is only compatible with version %s of the database schema while GYB %s is only compatible with version %s" % (db_version, __version__, __db_schema_version__)
-      sys.exit(4)
-    
-    # Only restores are allowed to use a backup folder started with another account (can't allow 2 Google Accounts to backup/estimate from same folder)
-    if action != 'restore':
-      if user_email_address.lower() != db_email_address.lower():
-        print "\n\nSorry, this backup folder should only be used with the %s account that it was created with for incremental backups. You specified the %s account" % (db_email_address, user_email_address)
-        sys.exit(5)
+    sqlcur.execute('SELECT name, value FROM settings')
+    db_settings = dict(sqlcur) 
+    return db_settings
   except sqlite3.OperationalError, e:
     if e.message == 'no such table: settings':
       print "\n\nSorry, this version of GYB requires version %s of the database schema. Your backup folder database does not have a version." % (__db_schema_version__)
       sys.exit(6)
+    else: 
+      print "%s" % e
+
+def check_db_settings(db_settings, action, user_email_address):
+  if action == 'restore':
+    if (db_settings['db_version'] < __db_schema_min_version__  or
+        db_settings['db_version'] > __db_schema_version__):
+      print "\n\nSorry, this backup folder was created with version %s of the database schema while GYB %s requires version %s - %s for restores" % (db_settings['db_version'], __version__, __db_schema_min_version__, __db_schema_version__)
+      sys.exit(4)
+    return
+
+  if db_settings['db_version'] != __db_schema_version__:
+    print "\n\nSorry, this backup folder was created with version %s of the database schema while GYB %s is only compatible with version %s" % (db_settings['db_version'], __version__, __db_schema_version__)
+    sys.exit(4)
+  
+  # Only restores are allowed to use a backup folder started with another account (can't allow 2 Google Accounts to backup/estimate from same folder)
+  if user_email_address.lower() != db_settings['email_address'].lower():
+    print "\n\nSorry, this backup folder should only be used with the %s account that it was created with for incremental backups. You specified the %s account" % (db_settings['email_address'], user_email_address)
+    sys.exit(5)
+
+def convertDB(imapconn, sqlconn, uidvalidity):
+  sqlcur = sqlconn.cursor()
+  sqlcur.execute( '''CREATE TABLE IF NOT EXISTS uids 
+                   (message_num INTEGER, uid INTEGER PRIMARY KEY)''')
+  rebuildUIDTable(imapconn,sqlconn)
+  sqlcur.executescript('''
+      ATTACH ':memory:' as work;
+      BEGIN TRANSACTION;
+      CREATE TABLE work.messages as 
+        SELECT uids.message_num, message_filename, message_to, message_from, message_subject, message_internaldate
+        FROM uids, messages WHERE messages.message_num = uids.uid;
+      CREATE TABLE work.labels as 
+        SELECT uids.message_num, label
+        FROM uids, labels WHERE labels.message_num = uids.uid;
+      CREATE TABLE work.flags as 
+        SELECT uids.message_num, flag
+        FROM uids, flags WHERE flags.message_num = uids.uid;
+      DELETE FROM messages;
+      DELETE FROM labels;
+      DELETE FROM flags;
+      INSERT INTO messages SELECT * from work.messages;
+      INSERT INTO labels SELECT * from work.labels;
+      INSERT INTO flags SELECT * from work.flags;
+      COMMIT;
+      DETACH work;
+  ''')
+  sqlcur.executemany('REPLACE INTO settings (name, value) VALUES (?,?)',
+                      (('uidvalidity',uidvalidity), 
+                       ('db_version', __db_schema_version__)) )   
+  sqlconn.commit()
+  print "GYB database converted to version %s" % __db_schema_version__
+ 
+def rebuildUIDTable(imapconn, sqlconn):
+  t, d = imapconn.fetch('1:*', '(X-GM-MSGID UID)')
+  if t != 'OK':
+    print 'Error fetching the UID list'
+    sys.exit(8)
+  sqlcur = sqlconn.cursor()
+  sqlcur.execute('DELETE FROM uids')
+  for x in d:
+    message_num, uid = re.search('X-GM-MSGID ([0-9]*).*UID ([0-9]*)', x).groups()
+    sqlcur.execute('INSERT into uids (message_num, uid) VALUES (?,?)', 
+                   (message_num, uid))
+  sqlconn.commit()
         
 def doesTokenMatchEmail(cli_email, key, secret, debug=False):
   s = gdata.apps.service.AppsService(source=__program_name__+' '+__version__)
@@ -251,14 +318,26 @@ def restart_line():
   sys.stdout.write('\r')
   sys.stdout.flush()
 
-def initializeDB(sqlcur, sqlconn, email):
-  sqlcur.execute('CREATE TABLE messages (message_num INTEGER PRIMARY KEY, message_filename TEXT, message_to TEXT, message_from TEXT, message_subject TEXT, message_internaldate TIMESTAMP)')
-  sqlcur.execute('CREATE TABLE labels (message_num INTEGER, label TEXT)')
-  sqlcur.execute('CREATE TABLE flags (message_num INTEGER, flag TEXT)')
-  sqlcur.execute('CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT)')
+def initializeDB(sqlcur, sqlconn, email, uidvalidity):
+  sqlcur.executescript('''
+   CREATE TABLE messages(message_num INTEGER PRIMARY KEY, 
+                message_filename TEXT, 
+                message_to TEXT, 
+                message_from TEXT, 
+                message_subject TEXT, 
+                message_internaldate TIMESTAMP);
+   CREATE TABLE labels (message_num INTEGER, label TEXT, 
+                        UNIQUE(message_num, label));
+   CREATE TABLE flags (message_num INTEGER, flag TEXT, 
+                        UNIQUE(message_num, flag));
+   CREATE TABLE uids (message_num INTEGER, uid INTEGER PRIMARY KEY);
+   CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT);
+  ''')
   sqlconn.commit()
-  sqlcur.execute('INSERT INTO settings (name, value) VALUES (\'email_address\', ?)', [email])
-  sqlcur.execute('INSERT INTO settings (name, value) VALUES (\'db_version\', ?)', [__db_schema_version__])
+  sqlcur.executemany('INSERT INTO settings (name, value) VALUES (?, ?)', 
+         (('email_address', email),
+          ('db_version', __db_schema_version__),
+          ('uidvalidity', uidvalidity)))
   sqlconn.commit()
 
 def get_message_size(imapconn, uids):
@@ -309,13 +388,26 @@ def main(argv):
       cfgFile = '%s%s.cfg' % (getProgPath(), options.email)
       os.remove(cfgFile)
       sys.exit(9)
-  imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug) # dynamically generate the xoauth_string since they expire after 10 minutes
+
+  imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress) # dynamically generate the xoauth_string since they expire after 10 minutes
   if not os.path.isdir(options.folder):
     if options.action == 'backup':
       os.mkdir(options.folder)
     elif options.action == 'restore':
       print 'Error: Folder %s does not exist. Cannot restore.' % options.folder
       sys.exit(3)
+
+  global ALL_MAIL
+  ALL_MAIL = gimaplib.GImapGetFolder(imapconn)
+  if ALL_MAIL == None:
+    # Last ditched best guess but All Mail is probably hidden from IMAP...
+    ALL_MAIL = '[Gmail]/All Mail'
+  r, d = imapconn.select(ALL_MAIL, readonly=True)
+  if r == 'NO':
+    print "Error: Cannot select the Gmail \"All Mail\" folder. Please make sure it is not hidden from IMAP."
+    sys.exit(3)
+  uidvalidity = imapconn.response('UIDVALIDITY')[1][0]
+
   sqldbfile = os.path.join(options.folder, 'msg-db.sqlite')
   # Do we need to initialize a new database?
   newDB = (not os.path.isfile(sqldbfile)) and (options.action == 'backup')
@@ -329,18 +421,19 @@ def main(argv):
     sqlconn.text_factory = str
     sqlcur = sqlconn.cursor()
     if newDB:
-      initializeDB(sqlcur, sqlconn, options.email)
-    check_db_settings(sqlcur, sqlconn, options.action, options.email)
-  global ALL_MAIL
-  ALL_MAIL = gimaplib.GImapGetFolder(imapconn)
-  if ALL_MAIL == None:
-    # Last ditched best guess but All Mail is probably hidden from IMAP...
-    ALL_MAIL = '[Gmail]/All Mail'
-  r, d = imapconn.select(ALL_MAIL, readonly=True)
-  if r == 'NO':
-    print "Error: Cannot select the Gmail \"All Mail\" folder. Please make sure it is not hidden from IMAP."
-    sys.exit(3)
-  
+      initializeDB(sqlcur, sqlconn, options.email, uidvalidity)
+    db_settings = get_db_settings(sqlcur)
+    if options.action != 'restore':
+      if 'uidvalidity' not in db_settings or db_settings['db_version'] == '2':
+        convertDB(imapconn, sqlconn, uidvalidity)
+        db_settings = get_db_settings(sqlcur)
+      if db_settings['uidvalidity'] != uidvalidity:
+        rebuildUIDTable(imapconn, sqlconn)
+        sqlcur.execute('''UPDATE settings set value = ? 
+                          WHERE name = 'uidvalidity' ''', (uidvalidity))
+        sqlconn.commit()
+    check_db_settings(db_settings, options.action, options.email)
+
   # BACKUP #
   if options.action == 'backup':
     imapconn.select(ALL_MAIL, readonly=True)
@@ -363,7 +456,7 @@ def main(argv):
     print "GYB already has a backup of %s messages" % (len(messages_to_process) - len(messages_to_backup))
     backup_count = len(messages_to_backup)
     print "GYB needs to backup %s messages" % backup_count
-    messages_at_once = 100
+    messages_at_once = options.batch_size
     backed_up_messages = 0
     for working_messages in batch(messages_to_backup, messages_at_once):
       #Save message content
@@ -371,26 +464,26 @@ def main(argv):
       bad_count = 0
       while True:
         try:
-          r, d = imapconn.uid('FETCH', batch_string, '(X-GM-LABELS INTERNALDATE FLAGS BODY.PEEK[])')
+          r, d = imapconn.uid('FETCH', batch_string, '(X-GM-MSGID X-GM-LABELS INTERNALDATE FLAGS BODY.PEEK[])')
           if r != 'OK':
             bad_count = bad_count + 1
             if bad_count > 7:
               print "Error: failed to retrieve messages."
               sys.exit(5)
             sleep_time = math.pow(2, bad_count)
-            sys.stdout.write("\nServer responded with %s, will retry in %s seconds" % (r, str(sleep_time)))
+            sys.stdout.write("\nServer responded with %s %s, will retry in %s seconds" % (r, d, str(sleep_time)))
             time.sleep(sleep_time) # sleep 2 seconds, then 4, 8, 16, 32, 64, 128
-            imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
+            imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
             imapconn.select(ALL_MAIL, readonly=True)
             continue
           break
-        except imaplib.IMAP4.abort:
-          print 'imaplib.abort error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
+        except imaplib.IMAP4.abort, e:
+          print 'imaplib.abort error:%s, retrying...' % e
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
           imapconn.select(ALL_MAIL, readonly=True)
-        except socket.error:
-          print 'socket.error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
+        except socket.error, e:
+          print 'socket.error:%s, retrying...' % e
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
           imapconn.select(ALL_MAIL, readonly=True)
       for x in d:
         if x[0] == ')':
@@ -401,11 +494,12 @@ def main(argv):
         except IndexError:
           print "skipped '%s'" % x[0]
           continue
-        search_results = re.search('^[0-9]* \(X-GM-LABELS \((.*)\) UID ([0-9]*) (INTERNALDATE \".*\") (FLAGS \(.*\))', everything_else_string)
-        labels = shlex.split(search_results.group(1).replace('\\', '\\\\'))
-        message_num = search_results.group(2)
-        message_date_string = search_results.group(3)
-        message_flags_string = search_results.group(4)
+        search_results = re.search('^[0-9]* \(X-GM-MSGID ([0-9]*) X-GM-LABELS \((.*)\) UID ([0-9]*) (INTERNALDATE \".*\") (FLAGS \(.*\))', everything_else_string)
+        message_num = search_results.group(1)
+        labels = shlex.split(search_results.group(2).replace('\\', '\\\\'))
+        uid = search_results.group(3)
+        message_date_string = search_results.group(4)
+        message_flags_string = search_results.group(5)
         message_date = imaplib.Internaldate2tuple(message_date_string)
         time_seconds_since_epoch = time.mktime(message_date)
         message_internal_datetime = datetime.datetime.fromtimestamp(time_seconds_since_epoch)
@@ -423,22 +517,19 @@ def main(argv):
         message_to = m.get('to')
         message_subj = m.get('subject')
         sqlcur.execute("INSERT INTO messages (message_num, message_filename, message_to, message_from, message_subject, message_internaldate) VALUES (?, ?, ?, ?, ?, ?)", (message_num, message_rel_filename, message_to, message_from, message_subj, message_internal_datetime))
+        sqlcur.execute("REPLACE INTO uids (message_num, uid) VALUES (?, ?)", (message_num, uid))
         for label in labels:
           sqlcur.execute("INSERT INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
         for flag in message_flags:
           sqlcur.execute("INSERT INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
+        backed_up_messages += 1
 
       sqlconn.commit()
-      if backed_up_messages+messages_at_once < backup_count:
-        backed_up_messages = backed_up_messages + messages_at_once
-      else:
-        backed_up_messages = backup_count
       restart_line()
       sys.stdout.write("backed up %s of %s messages" % (backed_up_messages, backup_count))
       sys.stdout.flush()
     print "\n"
-
-  
+      
   # RESTORE #
   elif options.action == 'restore':
     imapconn.select(ALL_MAIL)  # read/write!
@@ -490,11 +581,11 @@ def main(argv):
           break
         except imaplib.IMAP4.abort:
           print 'imaplib.abort error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
           imapconn.select(ALL_MAIL)
         except socket.error:
           print 'socket.error, retrying...'
-          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug)
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
           imapconn.select(ALL_MAIL)
       current = current + 1
   
@@ -545,6 +636,7 @@ def main(argv):
     sqlconn.close()
   except NameError:
     pass
+  #imapconn.display_stats()
   imapconn.logout()
   
 if __name__ == '__main__':
@@ -554,7 +646,7 @@ if __name__ == '__main__':
     try:
       sqlconn.commit()
       sqlconn.close()
+      print
     except NameError:
       pass
-    print ''  # Newline
     sys.exit(4)
