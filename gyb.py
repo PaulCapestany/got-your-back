@@ -244,7 +244,8 @@ def check_db_settings(db_settings, action, user_email_address):
       sys.exit(4)
     return
 
-  if db_settings['db_version'] != __db_schema_version__:
+  if (db_settings['db_version'] < __db_schema_min_version__ or
+      db_settings['db_version'] > __db_schema_version__):
     print "\n\nSorry, this backup folder was created with version %s of the database schema while GYB %s is only compatible with version %s" % (db_settings['db_version'], __version__, __db_schema_version__)
     sys.exit(4)
   
@@ -321,11 +322,11 @@ def restart_line():
 def initializeDB(sqlcur, sqlconn, email, uidvalidity):
   sqlcur.executescript('''
    CREATE TABLE messages(message_num INTEGER PRIMARY KEY, 
-                message_filename TEXT, 
-                message_to TEXT, 
-                message_from TEXT, 
-                message_subject TEXT, 
-                message_internaldate TIMESTAMP);
+                         message_filename TEXT, 
+                         message_to TEXT, 
+                         message_from TEXT, 
+                         message_subject TEXT, 
+                         message_internaldate TIMESTAMP);
    CREATE TABLE labels (message_num INTEGER, label TEXT, 
                         UNIQUE(message_num, label));
    CREATE TABLE flags (message_num INTEGER, flag TEXT, 
@@ -423,6 +424,7 @@ def main(argv):
     if newDB:
       initializeDB(sqlcur, sqlconn, options.email, uidvalidity)
     db_settings = get_db_settings(sqlcur)
+    check_db_settings(db_settings, options.action, options.email)
     if options.action != 'restore':
       if 'uidvalidity' not in db_settings or db_settings['db_version'] == '2':
         convertDB(imapconn, sqlconn, uidvalidity)
@@ -430,9 +432,8 @@ def main(argv):
       if db_settings['uidvalidity'] != uidvalidity:
         rebuildUIDTable(imapconn, sqlconn)
         sqlcur.execute('''UPDATE settings set value = ? 
-                          WHERE name = 'uidvalidity' ''', (uidvalidity))
+                          WHERE name = 'uidvalidity' ''', ((uidvalidity),))
         sqlconn.commit()
-    check_db_settings(db_settings, options.action, options.email)
 
   # BACKUP #
   if options.action == 'backup':
@@ -442,6 +443,7 @@ def main(argv):
     if not os.path.isdir(backup_path):
       os.mkdir(backup_path)
     messages_to_backup = []
+    messages_to_refresh = []
     #Determine which messages from the search we haven't processed before.
     print "GYB needs to examine %s messages" % len(messages_to_process)
     for message_num in messages_to_process:
@@ -450,7 +452,7 @@ def main(argv):
         messages_to_backup.append(message_num)
         continue
       if message_is_backed_up(message_num, sqlcur, sqlconn, options.folder):
-        continue
+        messages_to_refresh.append(message_num)
       else:
         messages_to_backup.append(message_num)
     print "GYB already has a backup of %s messages" % (len(messages_to_process) - len(messages_to_backup))
@@ -516,12 +518,12 @@ def main(argv):
         message_from = m.get('from')
         message_to = m.get('to')
         message_subj = m.get('subject')
-        sqlcur.execute("INSERT INTO messages (message_num, message_filename, message_to, message_from, message_subject, message_internaldate) VALUES (?, ?, ?, ?, ?, ?)", (message_num, message_rel_filename, message_to, message_from, message_subj, message_internal_datetime))
+        sqlcur.execute("REPLACE INTO messages (message_num, message_filename, message_to, message_from, message_subject, message_internaldate) VALUES (?, ?, ?, ?, ?, ?)", (message_num, message_rel_filename, message_to, message_from, message_subj, message_internal_datetime))
         sqlcur.execute("REPLACE INTO uids (message_num, uid) VALUES (?, ?)", (message_num, uid))
         for label in labels:
-          sqlcur.execute("INSERT INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
+          sqlcur.execute("REPLACE INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
         for flag in message_flags:
-          sqlcur.execute("INSERT INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
+          sqlcur.execute("REPLACE INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
         backed_up_messages += 1
 
       sqlconn.commit()
@@ -529,7 +531,7 @@ def main(argv):
       sys.stdout.write("backed up %s of %s messages" % (backed_up_messages, backup_count))
       sys.stdout.flush()
     print "\n"
-      
+ 
   # RESTORE #
   elif options.action == 'restore':
     imapconn.select(ALL_MAIL)  # read/write!
@@ -552,14 +554,14 @@ def main(argv):
       f = open(os.path.join(options.folder, message_filename), 'rb')
       full_message = f.read()
       f.close()
-      labels_query = sqlcur.execute('SELECT label FROM labels WHERE message_num = ?', (message_num,))
+      labels_query = sqlcur.execute('SELECT DISTINCT label FROM labels WHERE message_num = ?', (message_num,))
       labels_results = sqlcur.fetchall()
       labels = []
       for l in labels_results:
         labels.append(l[0])
       if options.label_restored:
         labels.append(options.label_restored)
-      flags_query = sqlcur.execute('SELECT flag FROM flags WHERE message_num = ?', (message_num,))
+      flags_query = sqlcur.execute('SELECT DISTINCT flag FROM flags WHERE message_num = ?', (message_num,))
       flags_results = sqlcur.fetchall()
       flags = []
       for f in flags_results:
