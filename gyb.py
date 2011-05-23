@@ -214,7 +214,7 @@ def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):
     try:
       sqlcur.execute('''
          SELECT message_filename FROM uids NATURAL JOIN messages
-                where uids.uid = ?''', ((message_num),))
+                where uid = ?''', ((message_num),))
     except sqlite3.OperationalError, e:
       if e.message == 'no such table: messages':
         print "\n\nError: your backup database file appears to be corrupted."
@@ -267,24 +267,18 @@ def convertDB(imapconn, sqlconn, uidvalidity):
       BEGIN TRANSACTION;
       CREATE INDEX labelidx ON labels (message_num);
       CREATE INDEX flagidx ON flags (message_num);
-      CREATE TEMP TABLE temp_messages as 
-        SELECT uids.message_num, message_filename, message_to, message_from, message_subject, message_internaldate
-        FROM uids, messages WHERE messages.message_num = uids.uid;
-      CREATE TEMP TABLE temp_labels as 
-        SELECT uids.message_num, label
-        FROM uids, labels WHERE labels.message_num = uids.uid;
-      CREATE TEMP TABLE temp_flags as 
-        SELECT uids.message_num, flag
-        FROM uids, flags WHERE flags.message_num = uids.uid;
-      DELETE FROM messages;
-      DELETE FROM labels;
-      DELETE FROM flags;
-      INSERT INTO messages SELECT * from temp_messages;
-      INSERT INTO labels SELECT * from temp_labels;
-      INSERT INTO flags SELECT * from temp_flags;
-      DROP TABLE temp_messages;
-      DROP TABLE temp_labels;
-      DROP TABLE temp_flags;
+      -- Fill in UIDs for deleted messages
+      INSERT INTO uids (message_num, uid) 
+        SELECT message_num, message_num AS uid from messages 
+        WHERE message_num NOT IN (SELECT uid from uids);
+      UPDATE messages set message_num = 
+         (SELECT message_num from uids where uids.uid = messages.message_num);
+      UPDATE labels set message_num = 
+         (SELECT message_num from uids where uids.uid = labels.message_num);
+      UPDATE flags set message_num = 
+         (SELECT message_num from uids where uids.uid = flags.message_num);
+      -- Now, remove the uid entries for deleted messages
+      DELETE FROM uids where uid = message_num;
       COMMIT;
   ''')
   sqlcur.executemany('REPLACE INTO settings (name, value) VALUES (?,?)',
