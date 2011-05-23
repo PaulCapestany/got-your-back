@@ -23,7 +23,7 @@ For more information, see http://code.google.com/p/got-your-back/
 __program_name__ = 'Got Your Back: Gmail Backup'
 __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
-__version__ = '0.09 Alpha'
+__version__ = '0.10 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
 __db_schema_version__ = '3'
 __db_schema_min_version__ = '2'        #Minimum for restore
@@ -100,6 +100,10 @@ def SetupOptionParser():
     dest='compress',
     action='store_true',
     help='Optional: enable compression to reduce bandwidth')
+  parser.add_option('-F', '--fast-incremental',
+    dest='refresh',
+    action='store_true',
+    help='Optional: skips refreshing labels for existing message')
   return parser
 
 def getProgPath():
@@ -260,25 +264,28 @@ def convertDB(imapconn, sqlconn, uidvalidity):
                    (message_num INTEGER, uid INTEGER PRIMARY KEY)''')
   rebuildUIDTable(imapconn,sqlconn)
   sqlcur.executescript('''
-      ATTACH ':memory:' as work;
       BEGIN TRANSACTION;
-      CREATE TABLE work.messages as 
+      CREATE INDEX labelidx ON labels (message_num);
+      CREATE INDEX flagidx ON flags (message_num);
+      CREATE TEMP TABLE temp_messages as 
         SELECT uids.message_num, message_filename, message_to, message_from, message_subject, message_internaldate
         FROM uids, messages WHERE messages.message_num = uids.uid;
-      CREATE TABLE work.labels as 
+      CREATE TEMP TABLE temp_labels as 
         SELECT uids.message_num, label
         FROM uids, labels WHERE labels.message_num = uids.uid;
-      CREATE TABLE work.flags as 
+      CREATE TEMP TABLE temp_flags as 
         SELECT uids.message_num, flag
         FROM uids, flags WHERE flags.message_num = uids.uid;
       DELETE FROM messages;
       DELETE FROM labels;
       DELETE FROM flags;
-      INSERT INTO messages SELECT * from work.messages;
-      INSERT INTO labels SELECT * from work.labels;
-      INSERT INTO flags SELECT * from work.flags;
+      INSERT INTO messages SELECT * from temp_messages;
+      INSERT INTO labels SELECT * from temp_labels;
+      INSERT INTO flags SELECT * from temp_flags;
+      DROP TABLE temp_messages;
+      DROP TABLE temp_labels;
+      DROP TABLE temp_flags;
       COMMIT;
-      DETACH work;
   ''')
   sqlcur.executemany('REPLACE INTO settings (name, value) VALUES (?,?)',
                       (('uidvalidity',uidvalidity), 
@@ -327,12 +334,12 @@ def initializeDB(sqlcur, sqlconn, email, uidvalidity):
                          message_from TEXT, 
                          message_subject TEXT, 
                          message_internaldate TIMESTAMP);
-   CREATE TABLE labels (message_num INTEGER, label TEXT, 
-                        UNIQUE(message_num, label));
-   CREATE TABLE flags (message_num INTEGER, flag TEXT, 
-                        UNIQUE(message_num, flag));
+   CREATE TABLE labels (message_num INTEGER, label TEXT);
+   CREATE TABLE flags (message_num INTEGER, flag TEXT);
    CREATE TABLE uids (message_num INTEGER, uid INTEGER PRIMARY KEY);
    CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT);
+   CREATE INDEX labelidx ON labels (message_num);
+   CREATE INDEX flagidx ON flags (message_num);
   ''')
   sqlconn.commit()
   sqlcur.executemany('INSERT INTO settings (name, value) VALUES (?, ?)', 
@@ -521,14 +528,67 @@ def main(argv):
         sqlcur.execute("REPLACE INTO messages (message_num, message_filename, message_to, message_from, message_subject, message_internaldate) VALUES (?, ?, ?, ?, ?, ?)", (message_num, message_rel_filename, message_to, message_from, message_subj, message_internal_datetime))
         sqlcur.execute("REPLACE INTO uids (message_num, uid) VALUES (?, ?)", (message_num, uid))
         for label in labels:
-          sqlcur.execute("REPLACE INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
+          sqlcur.execute("INSERT INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
         for flag in message_flags:
-          sqlcur.execute("REPLACE INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
+          sqlcur.execute("INSERT INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
         backed_up_messages += 1
 
       sqlconn.commit()
       restart_line()
       sys.stdout.write("backed up %s of %s messages" % (backed_up_messages, backup_count))
+      sys.stdout.flush()
+    print "\n"
+ 
+    if options.refresh:
+      messages_to_refresh = []
+    backed_up_messages = 0
+    backup_count = len(messages_to_refresh)
+    print "GYB needs to refresh %s messages" % backup_count
+    messages_at_once *= 100
+    for working_messages in batch(messages_to_refresh, messages_at_once):
+      #Save message content
+      batch_string = ','.join(working_messages)
+      bad_count = 0
+      while True:
+        try:
+          r, d = imapconn.uid('FETCH', batch_string, '(X-GM-MSGID X-GM-LABELS FLAGS)')
+          if r != 'OK':
+            bad_count = bad_count + 1
+            if bad_count > 7:
+              print "Error: failed to retrieve messages."
+              sys.exit(5)
+            sleep_time = math.pow(2, bad_count)
+            sys.stdout.write("\nServer responded with %s %s, will retry in %s seconds" % (r, d, str(sleep_time)))
+            time.sleep(sleep_time) # sleep 2 seconds, then 4, 8, 16, 32, 64, 128
+            imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
+            imapconn.select(ALL_MAIL, readonly=True)
+            continue
+          break
+        except imaplib.IMAP4.abort, e:
+          print 'imaplib.abort error:%s, retrying...' % e
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
+          imapconn.select(ALL_MAIL, readonly=True)
+        except socket.error, e:
+          print 'socket.error:%s, retrying...' % e
+          imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
+          imapconn.select(ALL_MAIL, readonly=True)
+      for results in d:
+        search_results = re.search('X-GM-MSGID ([0-9]*).*X-GM-LABELS \((.*)\).*(FLAGS \(.*\))', results)
+        message_num = search_results.group(1)
+        labels = shlex.split(search_results.group(2).replace('\\', '\\\\'))
+        message_flags_string = search_results.group(3)
+        message_flags = imaplib.ParseFlags(message_flags_string)
+        sqlcur.execute( "DELETE FROM labels where message_num = ?", ((message_num),))
+        sqlcur.execute( "DELETE FROM flags where message_num = ?", ((message_num),))
+        for label in labels:
+          sqlcur.execute("INSERT INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
+        for flag in message_flags:
+          sqlcur.execute("INSERT INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
+        backed_up_messages += 1
+
+      sqlconn.commit()
+      restart_line()
+      sys.stdout.write("refreshed %s of %s messages" % (backed_up_messages, backup_count))
       sys.stdout.flush()
     print "\n"
  
