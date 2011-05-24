@@ -71,8 +71,8 @@ def SetupOptionParser():
     help='Optional: Action to perform. backup, restore or estimate.')
   parser.add_option('-f', '--folder',
     dest='folder',
-	  help='Optional: Folder to use for backup or restore. Default is ./gmail-backup/',
-	  default='XXXuse-email-addessXXX')
+    help='Optional: Folder to use for backup or restore. Default is ./gmail-backup/',
+    default='XXXuse-email-addessXXX')
   parser.add_option('-s', '--search',
     dest='gmail_search',
     default='in:anywhere',
@@ -241,22 +241,16 @@ def get_db_settings(sqlcur):
       print "%s" % e
 
 def check_db_settings(db_settings, action, user_email_address):
-  if action == 'restore':
-    if (db_settings['db_version'] < __db_schema_min_version__  or
-        db_settings['db_version'] > __db_schema_version__):
-      print "\n\nSorry, this backup folder was created with version %s of the database schema while GYB %s requires version %s - %s for restores" % (db_settings['db_version'], __version__, __db_schema_min_version__, __db_schema_version__)
-      sys.exit(4)
-    return
-
-  if (db_settings['db_version'] < __db_schema_min_version__ or
+  if (db_settings['db_version'] < __db_schema_min_version__  or
       db_settings['db_version'] > __db_schema_version__):
-    print "\n\nSorry, this backup folder was created with version %s of the database schema while GYB %s is only compatible with version %s" % (db_settings['db_version'], __version__, __db_schema_version__)
+    print "\n\nSorry, this backup folder was created with version %s of the database schema while GYB %s requires version %s - %s for restores" % (db_settings['db_version'], __version__, __db_schema_min_version__, __db_schema_version__)
     sys.exit(4)
-  
+
   # Only restores are allowed to use a backup folder started with another account (can't allow 2 Google Accounts to backup/estimate from same folder)
-  if user_email_address.lower() != db_settings['email_address'].lower():
-    print "\n\nSorry, this backup folder should only be used with the %s account that it was created with for incremental backups. You specified the %s account" % (db_settings['email_address'], user_email_address)
-    sys.exit(5)
+  if action != 'restore':
+    if user_email_address.lower() != db_settings['email_address'].lower():
+      print "\n\nSorry, this backup folder should only be used with the %s account that it was created with for incremental backups. You specified the %s account" % (db_settings['email_address'], user_email_address)
+      sys.exit(5)
 
 def convertDB(imapconn, sqlconn, uidvalidity):
   sqlcur = sqlconn.cursor()
@@ -431,6 +425,8 @@ def main(argv):
         convertDB(imapconn, sqlconn, uidvalidity)
         db_settings = get_db_settings(sqlcur)
       if db_settings['uidvalidity'] != uidvalidity:
+        print "Because of changes on the Gmail server, this folder cannot be used for incremental backups."
+        sys.exit(3)
         rebuildUIDTable(imapconn, sqlconn)
         sqlcur.execute('''UPDATE settings set value = ? 
                           WHERE name = 'uidvalidity' ''', ((uidvalidity),))
@@ -678,7 +674,7 @@ def main(argv):
         math_size = total_size/1024
         print_size = "%.2fK" % math_size
       else:
-	    print_size = "%.2fb" % total_size
+        print_size = "%.2fb" % total_size
       if estimated_messages+messages_at_once < estimate_count:
         estimated_messages = estimated_messages + messages_at_once
       else:
