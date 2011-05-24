@@ -541,7 +541,7 @@ def main(argv):
       bad_count = 0
       while True:
         try:
-          r, d = imapconn.uid('FETCH', batch_string, '(X-GM-MSGID X-GM-LABELS FLAGS)')
+          r, d = imapconn.uid('FETCH', batch_string, '(X-GM-LABELS FLAGS)')
           if r != 'OK':
             bad_count = bad_count + 1
             if bad_count > 7:
@@ -563,17 +563,21 @@ def main(argv):
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
           imapconn.select(ALL_MAIL, readonly=True)
       for results in d:
-        search_results = re.search('X-GM-MSGID ([0-9]*).*X-GM-LABELS \((.*)\).*(FLAGS \(.*\))', results)
-        message_num = search_results.group(1)
-        labels = shlex.split(search_results.group(2).replace('\\', '\\\\'))
+        search_results = re.search('X-GM-LABELS \((.*)\) UID ([0-9]*) (FLAGS \(.*\))', results)
+        labels = shlex.split(search_results.group(1).replace('\\', '\\\\'))
+        uid = search_results.group(2)
         message_flags_string = search_results.group(3)
         message_flags = imaplib.ParseFlags(message_flags_string)
-        sqlcur.execute( "DELETE FROM labels where message_num = ?", ((message_num),))
-        sqlcur.execute( "DELETE FROM flags where message_num = ?", ((message_num),))
-        for label in labels:
-          sqlcur.execute("INSERT INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
-        for flag in message_flags:
-          sqlcur.execute("INSERT INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
+        sqlcur.execute("""DELETE FROM labels where message_num = 
+                   (SELECT message_num from uids where uid = ?)""", ((uid),))
+        sqlcur.execute("""DELETE FROM flags where message_num = 
+                   (SELECT message_num from uids where uid = ?)""", ((uid),))
+        sqlcur.executemany("""INSERT INTO labels (message_num, label) 
+            SELECT message_num, ? from uids where uid = ?""", 
+            ((label,uid) for label in labels))
+        sqlcur.executemany("""INSERT INTO flags (message_num, flag) 
+            SELECT message_num, ? from uids where uid = ?""", 
+            ((flag,uid) for flag in message_flags))
         backed_up_messages += 1
 
       sqlconn.commit()
