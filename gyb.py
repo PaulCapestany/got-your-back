@@ -253,47 +253,27 @@ def check_db_settings(db_settings, action, user_email_address):
       sys.exit(5)
 
 def convertDB(imapconn, sqlconn, uidvalidity):
-  sqlcur = sqlconn.cursor()
-  sqlcur.execute( '''CREATE TABLE IF NOT EXISTS uids 
-                   (message_num INTEGER, uid INTEGER PRIMARY KEY)''')
-  rebuildUIDTable(imapconn,sqlconn)
-  sqlcur.executescript('''
-      BEGIN TRANSACTION;
-      CREATE INDEX labelidx ON labels (message_num);
-      CREATE INDEX flagidx ON flags (message_num);
-      -- Fill in UIDs for deleted messages
-      INSERT INTO uids (message_num, uid) 
-        SELECT message_num, message_num AS uid from messages 
-        WHERE message_num NOT IN (SELECT uid from uids);
-      UPDATE messages set message_num = 
-         (SELECT message_num from uids where uids.uid = messages.message_num);
-      UPDATE labels set message_num = 
-         (SELECT message_num from uids where uids.uid = labels.message_num);
-      UPDATE flags set message_num = 
-         (SELECT message_num from uids where uids.uid = flags.message_num);
-      -- Now, remove the uid entries for deleted messages
-      DELETE FROM uids where uid = message_num;
-      COMMIT;
-  ''')
-  sqlcur.executemany('REPLACE INTO settings (name, value) VALUES (?,?)',
-                      (('uidvalidity',uidvalidity), 
-                       ('db_version', __db_schema_version__)) )   
-  sqlconn.commit()
+  print "Converting database"
+  try:
+    with sqlconn:
+      sqlconn.executescript('''
+        BEGIN;
+        CREATE TABLE uids 
+            (message_num INTEGER, uid INTEGER PRIMARY KEY); 
+        INSERT INTO uids (uid, message_num) 
+             SELECT message_num as uid, message_num FROM messages;
+        CREATE INDEX labelidx ON labels (message_num);
+        CREATE INDEX flagidx ON flags (message_num);
+        COMMIT;
+      ''')
+      sqlconn.executemany('REPLACE INTO settings (name, value) VALUES (?,?)',
+                        (('uidvalidity',uidvalidity), 
+                         ('db_version', __db_schema_version__)) )   
+  except sqlite3.OperationalError, e:
+      print "Conversion error: %s" % e.message
+
   print "GYB database converted to version %s" % __db_schema_version__
  
-def rebuildUIDTable(imapconn, sqlconn):
-  t, d = imapconn.fetch('1:*', '(X-GM-MSGID UID)')
-  if t != 'OK':
-    print 'Error fetching the UID list'
-    sys.exit(8)
-  sqlcur = sqlconn.cursor()
-  sqlcur.execute('DELETE FROM uids')
-  for x in d:
-    message_num, uid = re.search('X-GM-MSGID ([0-9]*).*UID ([0-9]*)', x).groups()
-    sqlcur.execute('INSERT into uids (message_num, uid) VALUES (?,?)', 
-                   (message_num, uid))
-  sqlconn.commit()
-        
 def doesTokenMatchEmail(cli_email, key, secret, debug=False):
   s = gdata.apps.service.AppsService(source=__program_name__+' '+__version__)
   s.debug = debug
@@ -329,7 +309,6 @@ def initializeDB(sqlcur, sqlconn, email, uidvalidity):
    CREATE INDEX labelidx ON labels (message_num);
    CREATE INDEX flagidx ON flags (message_num);
   ''')
-  sqlconn.commit()
   sqlcur.executemany('INSERT INTO settings (name, value) VALUES (?, ?)', 
          (('email_address', email),
           ('db_version', __db_schema_version__),
@@ -427,10 +406,6 @@ def main(argv):
       if db_settings['uidvalidity'] != uidvalidity:
         print "Because of changes on the Gmail server, this folder cannot be used for incremental backups."
         sys.exit(3)
-        rebuildUIDTable(imapconn, sqlconn)
-        sqlcur.execute('''UPDATE settings set value = ? 
-                          WHERE name = 'uidvalidity' ''', ((uidvalidity),))
-        sqlconn.commit()
 
   # BACKUP #
   if options.action == 'backup':
@@ -463,7 +438,7 @@ def main(argv):
       bad_count = 0
       while True:
         try:
-          r, d = imapconn.uid('FETCH', batch_string, '(X-GM-MSGID X-GM-LABELS INTERNALDATE FLAGS BODY.PEEK[])')
+          r, d = imapconn.uid('FETCH', batch_string, '(X-GM-LABELS INTERNALDATE FLAGS BODY.PEEK[])')
           if r != 'OK':
             bad_count = bad_count + 1
             if bad_count > 7:
@@ -484,21 +459,12 @@ def main(argv):
           print 'socket.error:%s, retrying...' % e
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
           imapconn.select(ALL_MAIL, readonly=True)
-      for x in d:
-        if x[0] == ')':
-          continue
-        try:
-          full_message = x[1]
-          everything_else_string = x[0]
-        except IndexError:
-          print "skipped '%s'" % x[0]
-          continue
-        search_results = re.search('^[0-9]* \(X-GM-MSGID ([0-9]*) X-GM-LABELS \((.*)\) UID ([0-9]*) (INTERNALDATE \".*\") (FLAGS \(.*\))', everything_else_string)
-        message_num = search_results.group(1)
-        labels = shlex.split(search_results.group(2).replace('\\', '\\\\'))
-        uid = search_results.group(3)
-        message_date_string = search_results.group(4)
-        message_flags_string = search_results.group(5)
+      for everything_else_string, full_message in (x for x in d if x != ')'):
+        search_results = re.search('X-GM-LABELS \((.*)\) UID ([0-9]*) (INTERNALDATE \".*\") (FLAGS \(.*\))', everything_else_string)
+        labels = shlex.split(search_results.group(1).replace('\\', '\\\\'))
+        uid = search_results.group(2)
+        message_date_string = search_results.group(3)
+        message_flags_string = search_results.group(4)
         message_date = imaplib.Internaldate2tuple(message_date_string)
         time_seconds_since_epoch = time.mktime(message_date)
         message_internal_datetime = datetime.datetime.fromtimestamp(time_seconds_since_epoch)
@@ -515,12 +481,30 @@ def main(argv):
         message_from = m.get('from')
         message_to = m.get('to')
         message_subj = m.get('subject')
-        sqlcur.execute("REPLACE INTO messages (message_num, message_filename, message_to, message_from, message_subject, message_internaldate) VALUES (?, ?, ?, ?, ?, ?)", (message_num, message_rel_filename, message_to, message_from, message_subj, message_internal_datetime))
-        sqlcur.execute("REPLACE INTO uids (message_num, uid) VALUES (?, ?)", (message_num, uid))
+        sqlcur.execute("""
+             INSERT INTO messages (
+                         message_filename, 
+                         message_to, 
+                         message_from, 
+                         message_subject, 
+                         message_internaldate) VALUES (?, ?, ?, ?, ?)""", 
+                        (message_rel_filename, 
+                         message_to, 
+                         message_from, 
+                         message_subj, 
+                         message_internal_datetime))
+        message_num = sqlcur.lastrowid
+        sqlcur.execute("""
+             INSERT INTO uids (message_num, uid) VALUES (?, ?)""", 
+                              (message_num, uid))
         for label in labels:
-          sqlcur.execute("INSERT INTO labels (message_num, label) VALUES (?, ?)", (message_num, label))
+          sqlcur.execute("""
+             INSERT INTO labels (message_num, label) VALUES (?, ?)""",  
+                                (message_num, label))
         for flag in message_flags:
-          sqlcur.execute("INSERT INTO flags (message_num, flag) VALUES (?, ?)", (message_num, flag))
+          sqlcur.execute("""
+             INSERT INTO flags (message_num, flag) VALUES (?, ?)""", 
+                               (message_num, flag))
         backed_up_messages += 1
 
       sqlconn.commit()
