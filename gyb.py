@@ -469,9 +469,16 @@ def main(argv):
         time_seconds_since_epoch = time.mktime(message_date)
         message_internal_datetime = datetime.datetime.fromtimestamp(time_seconds_since_epoch)
         message_flags = imaplib.ParseFlags(message_flags_string)
-        message_rel_filename = os.path.join(str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday), str(message_num)+'.eml')
-        message_full_path = os.path.join(options.folder, str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday))
-        message_full_filename = os.path.join(options.folder, str(message_date.tm_year), str(message_date.tm_mon), str(message_date.tm_mday), str(message_num)+'.eml')
+        message_file_name = str(uidvalidity) + "-" + str(uid) + ".eml"
+        message_rel_path = os.path.join(str(message_date.tm_year), 
+                                        str(message_date.tm_mon), 
+                                        str(message_date.tm_mday))
+        message_rel_filename = os.path.join(message_rel_path, 
+                                            message_file_name)
+        message_full_path = os.path.join(options.folder, 
+                                         message_rel_path)
+        message_full_filename = os.path.join(options.folder, 
+                                             message_rel_filename)
         if not os.path.isdir(message_full_path):
           os.makedirs(message_full_path)
         f = open(message_full_filename, 'wb')
