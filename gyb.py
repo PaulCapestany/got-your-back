@@ -260,6 +260,7 @@ def convertDB(imapconn, sqlconn, uidvalidity):
         BEGIN;
         CREATE TABLE uids 
             (message_num INTEGER, uid INTEGER PRIMARY KEY); 
+        ALTER TABLE messages ADD COLUMN rfc822_msgid TEXT;
         INSERT INTO uids (uid, message_num) 
              SELECT message_num as uid, message_num FROM messages;
         CREATE INDEX labelidx ON labels (message_num);
@@ -301,7 +302,8 @@ def initializeDB(sqlcur, sqlconn, email, uidvalidity):
                          message_to TEXT, 
                          message_from TEXT, 
                          message_subject TEXT, 
-                         message_internaldate TIMESTAMP);
+                         message_internaldate TIMESTAMP,
+                         rfc822_msgid TEXT);
    CREATE TABLE labels (message_num INTEGER, label TEXT);
    CREATE TABLE flags (message_num INTEGER, flag TEXT);
    CREATE TABLE uids (message_num INTEGER, uid INTEGER PRIMARY KEY);
@@ -488,18 +490,21 @@ def main(argv):
         message_from = m.get('from')
         message_to = m.get('to')
         message_subj = m.get('subject')
+        message_id = m.get('message-id')
         sqlcur.execute("""
              INSERT INTO messages (
                          message_filename, 
                          message_to, 
                          message_from, 
                          message_subject, 
-                         message_internaldate) VALUES (?, ?, ?, ?, ?)""", 
+                         message_internaldate,
+                         rfc822_msgid) VALUES (?, ?, ?, ?, ?, ?)""", 
                         (message_rel_filename, 
                          message_to, 
                          message_from, 
                          message_subj, 
-                         message_internal_datetime))
+                         message_internal_datetime,
+                         message_id))
         message_num = sqlcur.lastrowid
         sqlcur.execute("""
              INSERT INTO uids (message_num, uid) VALUES (?, ?)""", 
