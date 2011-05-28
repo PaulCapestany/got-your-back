@@ -42,6 +42,7 @@ import socket
 import datetime
 import sqlite3
 import email
+import email.parser
 import re
 import shlex
 import urlparse
@@ -65,7 +66,7 @@ def SetupOptionParser():
     help='Full email address of user to backup')
   parser.add_option('-a', '--action',
     type='choice',
-    choices=['backup','restore','estimate'],
+    choices=['backup','restore','estimate', 'reindex'],
     dest='action',
     default='backup',
     help='Optional: Action to perform. backup, restore or estimate.')
@@ -102,7 +103,8 @@ def SetupOptionParser():
     help='Optional: enable compression to reduce bandwidth')
   parser.add_option('-F', '--fast-incremental',
     dest='refresh',
-    action='store_true',
+    action='store_false',
+    default=True,
     help='Optional: skips refreshing labels for existing message')
   return parser
 
@@ -252,7 +254,7 @@ def check_db_settings(db_settings, action, user_email_address):
       print "\n\nSorry, this backup folder should only be used with the %s account that it was created with for incremental backups. You specified the %s account" % (db_settings['email_address'], user_email_address)
       sys.exit(5)
 
-def convertDB(imapconn, sqlconn, uidvalidity):
+def convertDB(sqlconn, uidvalidity):
   print "Converting database"
   try:
     with sqlconn:
@@ -274,7 +276,71 @@ def convertDB(imapconn, sqlconn, uidvalidity):
       print "Conversion error: %s" % e.message
 
   print "GYB database converted to version %s" % __db_schema_version__
+
+def getMessageIDs (sqlconn, backup_folder):   
+  sqlcur = sqlconn.cursor()
+  for message_num, filename in sqlconn.execute('''
+               SELECT message_num, message_filename FROM messages 
+                      WHERE rfc822_msgid IS NULL'''):
+    message_full_filename = os.path.join(backup_folder, filename)
+    if os.path.isfile(message_full_filename):
+      f = open(message_full_filename, 'rb')
+      msgid = email.parser.HeaderParser().parse(f, True).get('message-id')
+      f.close()
+      if msgid is None: 
+        msgid = '<DummyMsgID>'
+      sqlcur.execute(
+          'UPDATE messages SET rfc822_msgid = ? WHERE message_num = ?',
+                     (msgid, message_num))
+  sqlconn.commit()
  
+def rebuildUIDTable(imapconn, sqlconn):
+  sqlcur = sqlconn.cursor()
+  sqlcur.execute('DELETE FROM uids')
+  sqlcur.execute('CREATE INDEX IF NOT EXISTS msgidx on messages(rfc822_msgid)')
+  exists = imapconn.response('exists')
+  exists = int(exists[1][0])
+  batch_size = 1000
+  for batch_start in xrange(1, exists, batch_size):
+    batch_end = min(exists, batch_start+batch_size-1)
+    t, d = imapconn.fetch('%d:%d' % (batch_start, batch_end),
+                '(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS '
+                             '(FROM TO SUBJECT MESSAGE-ID)])')
+    if t != 'OK':
+      print "Error: failed to retrieve messages."
+      sys.exit(5)
+    for extras, header in (x for x in d if x != ')'):
+      uid, message_date = re.search('UID ([0-9]*) (INTERNALDATE \".*\")', 
+                                     extras).groups()
+      time_seconds = time.mktime(imaplib.Internaldate2tuple(message_date))
+      message_internaldate = datetime.datetime.fromtimestamp(time_seconds)
+      m = email.parser.HeaderParser().parsestr(header, True)
+      msgid = m.get('message-id')
+      if msgid is None:
+        msgid = '<DummyMsgID>'
+      message_to = m.get('to')
+      message_from = m.get('from')
+      message_subject = m.get('subject')
+      try:
+        sqlcur.execute('''
+          INSERT INTO uids (uid, message_num) 
+            SELECT ?, message_num FROM messages WHERE
+                   rfc822_msgid = ? AND
+                   message_internaldate = ?''',
+                   (uid,
+                    msgid,
+                    message_internaldate))
+      except Exception, e:
+       print e
+       print e.message
+       print uid, msgid
+      if sqlcur.lastrowid is None:
+        print uid, rfc822_msgid
+    print "\b.",
+    sys.stdout.flush() 
+  sqlcur.execute('DROP INDEX msgidx')
+  sqlconn.commit()
+
 def doesTokenMatchEmail(cli_email, key, secret, debug=False):
   s = gdata.apps.service.AppsService(source=__program_name__+' '+__version__)
   s.debug = debug
@@ -403,8 +469,17 @@ def main(argv):
     check_db_settings(db_settings, options.action, options.email)
     if options.action != 'restore':
       if 'uidvalidity' not in db_settings or db_settings['db_version'] == '2':
-        convertDB(imapconn, sqlconn, uidvalidity)
+        convertDB(sqlconn, uidvalidity)
         db_settings = get_db_settings(sqlcur)
+      if options.action == 'reindex':
+        getMessageIDs(sqlconn, options.folder)
+        rebuildUIDTable(imapconn, sqlconn)
+        sqlconn.execute('''
+            UPDATE settings SET value = ? where name = 'uidvalidity'
+        ''', ((uidvalidity),))
+        sqlconn.commit()
+        sys.exit(0)
+
       if db_settings['uidvalidity'] != uidvalidity:
         print "Because of changes on the Gmail server, this folder cannot be used for incremental backups."
         sys.exit(3)
@@ -525,7 +600,7 @@ def main(argv):
       sys.stdout.flush()
     print "\n"
  
-    if options.refresh:
+    if not options.refresh:
       messages_to_refresh = []
     backed_up_messages = 0
     backup_count = len(messages_to_refresh)
