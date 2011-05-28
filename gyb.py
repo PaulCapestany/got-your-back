@@ -25,7 +25,7 @@ __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
 __version__ = '0.10 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
-__db_schema_version__ = '3'
+__db_schema_version__ = '4'
 __db_schema_min_version__ = '2'        #Minimum for restore
 
 import imaplib
@@ -254,24 +254,30 @@ def check_db_settings(db_settings, action, user_email_address):
       print "\n\nSorry, this backup folder should only be used with the %s account that it was created with for incremental backups. You specified the %s account" % (db_settings['email_address'], user_email_address)
       sys.exit(5)
 
-def convertDB(sqlconn, uidvalidity):
+def convertDB(sqlconn, uidvalidity, oldversion):
   print "Converting database"
   try:
     with sqlconn:
-      sqlconn.executescript('''
-        BEGIN;
-        CREATE TABLE uids 
-            (message_num INTEGER, uid INTEGER PRIMARY KEY); 
-        ALTER TABLE messages ADD COLUMN rfc822_msgid TEXT;
-        INSERT INTO uids (uid, message_num) 
-             SELECT message_num as uid, message_num FROM messages;
-        CREATE INDEX labelidx ON labels (message_num);
-        CREATE INDEX flagidx ON flags (message_num);
-        COMMIT;
-      ''')
+      if oldversion == '2':
+        sqlconn.executescript('''
+          BEGIN;
+          CREATE TABLE uids 
+              (message_num INTEGER, uid INTEGER PRIMARY KEY); 
+          ALTER TABLE messages ADD COLUMN rfc822_msgid TEXT;
+          INSERT INTO uids (uid, message_num) 
+               SELECT message_num as uid, message_num FROM messages;
+          CREATE INDEX labelidx ON labels (message_num);
+          CREATE INDEX flagidx ON flags (message_num);
+          COMMIT;
+        ''')
+      elif oldversion == '3':
+        sqlconn.execute('''
+          ALTER TABLE messages ADD COLUMN rfc822_msgid TEXT;
+        ''')
       sqlconn.executemany('REPLACE INTO settings (name, value) VALUES (?,?)',
                         (('uidvalidity',uidvalidity), 
                          ('db_version', __db_schema_version__)) )   
+      sqlconn.commit()
   except sqlite3.OperationalError, e:
       print "Conversion error: %s" % e.message
 
@@ -326,7 +332,9 @@ def rebuildUIDTable(imapconn, sqlconn):
           INSERT INTO uids (uid, message_num) 
             SELECT ?, message_num FROM messages WHERE
                    rfc822_msgid = ? AND
-                   message_internaldate = ?''',
+                   message_internaldate = ?
+                   GROUP BY rfc822_msgid 
+                   HAVING count(*) = 1''',
                    (uid,
                     msgid,
                     message_internaldate))
@@ -468,8 +476,9 @@ def main(argv):
     db_settings = get_db_settings(sqlcur)
     check_db_settings(db_settings, options.action, options.email)
     if options.action != 'restore':
-      if 'uidvalidity' not in db_settings or db_settings['db_version'] == '2':
-        convertDB(sqlconn, uidvalidity)
+      if ('uidvalidity' not in db_settings or 
+          db_settings['db_version'] <  __db_schema_version__):
+        convertDB(sqlconn, uidvalidity, db_settings['db_version'])
         db_settings = get_db_settings(sqlcur)
       if options.action == 'reindex':
         getMessageIDs(sqlconn, options.folder)
