@@ -96,6 +96,7 @@ def SetupOptionParser():
     help='Optional: Used on restore only. If specified, all restored messages will receive this label. For example, -l "3-21-11 Restore" will label all uploaded messages with that label.')
   parser.add_option('-L', '--from-label',
     dest='restore_label',
+    action='append',
     help='Optional: Used on restore only. If specified, only messages that were in the specified label will be restored.')
   parser.add_option('-t', '--two-legged',
     dest='two_legged',
@@ -674,12 +675,15 @@ def main(argv):
   elif options.action == 'restore':
     imapconn.select(ALL_MAIL)  # read/write!
     if options.restore_label:
+      sqlcur.execute('CREATE TEMP TABLE restore (label TEXT)')
+      sqlcur.executemany('INSERT INTO restore (label) VALUES(?)',
+                         ((label,) for label in options.restore_label))
       messages_to_restore = sqlcur.execute('''
          SELECT message_num, message_internaldate, message_filename 
            FROM messages WHERE message_num IN 
            (SELECT DISTINCT message_num from labels 
-              WHERE label = ?)
-      ''', ((options.restore_label),))
+              WHERE label IN restore)
+      ''')
     else:
       messages_to_restore = sqlcur.execute('''
          SELECT message_num, message_internaldate, message_filename 
