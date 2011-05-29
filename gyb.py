@@ -23,7 +23,7 @@ For more information, see http://code.google.com/p/got-your-back/
 __program_name__ = 'Got Your Back: Gmail Backup'
 __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
-__version__ = '0.12 Alpha'
+__version__ = '0.13 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
 __db_schema_version__ = '4'
 __db_schema_min_version__ = '2'        #Minimum for restore
@@ -687,6 +687,11 @@ def main(argv):
       ''') # All messages
     messages_to_restore_results = sqlcur.fetchall()
     restore_count = len(messages_to_restore_results)
+    if restore_count == 0 and options.restore_label:
+      print "No messages found in label: %s" % options.restore_label
+      print "Available labels are:"
+      for label in sqlcur.execute( 'SELECT DISTINCT LABEL FROM labels'):
+        print "\t%s" % label
     current = 1
     for x in messages_to_restore_results:
       restart_line()
