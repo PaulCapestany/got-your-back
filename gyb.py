@@ -94,6 +94,9 @@ def SetupOptionParser():
   parser.add_option('-l', '--label-restored',
     dest='label_restored',
     help='Optional: Used on restore only. If specified, all restored messages will receive this label. For example, -l "3-21-11 Restore" will label all uploaded messages with that label.')
+  parser.add_option('-L', '--from-label',
+    dest='restore_label',
+    help='Optional: Used on restore only. If specified, only messages that were in the specified label will be restored.')
   parser.add_option('-t', '--two-legged',
     dest='two_legged',
     help='Google Apps Business and Education accounts only. Use administrator two legged OAuth to authenticate as end user.')
@@ -258,19 +261,17 @@ def convertDB(sqlconn, uidvalidity, oldversion):
   print "Converting database"
   try:
     with sqlconn:
-      if oldversion == '2':
+      if oldversion < '3':
         sqlconn.executescript('''
           BEGIN;
           CREATE TABLE uids 
               (message_num INTEGER, uid INTEGER PRIMARY KEY); 
-          ALTER TABLE messages ADD COLUMN rfc822_msgid TEXT;
           INSERT INTO uids (uid, message_num) 
                SELECT message_num as uid, message_num FROM messages;
           CREATE INDEX labelidx ON labels (message_num);
           CREATE INDEX flagidx ON flags (message_num);
-          COMMIT;
         ''')
-      elif oldversion == '3':
+      if oldversion < '4':
         sqlconn.execute('''
           ALTER TABLE messages ADD COLUMN rfc822_msgid TEXT;
         ''')
@@ -285,13 +286,14 @@ def convertDB(sqlconn, uidvalidity, oldversion):
 
 def getMessageIDs (sqlconn, backup_folder):   
   sqlcur = sqlconn.cursor()
+  header_parser = email.parser.HeaderParser()
   for message_num, filename in sqlconn.execute('''
                SELECT message_num, message_filename FROM messages 
                       WHERE rfc822_msgid IS NULL'''):
     message_full_filename = os.path.join(backup_folder, filename)
     if os.path.isfile(message_full_filename):
       f = open(message_full_filename, 'rb')
-      msgid = email.parser.HeaderParser().parse(f, True).get('message-id')
+      msgid = header_parser.parse(f, True).get('message-id')
       f.close()
       if msgid is None: 
         msgid = '<DummyMsgID>'
@@ -302,6 +304,7 @@ def getMessageIDs (sqlconn, backup_folder):
  
 def rebuildUIDTable(imapconn, sqlconn):
   sqlcur = sqlconn.cursor()
+  header_parser = email.parser.HeaderParser()
   sqlcur.execute('DELETE FROM uids')
   sqlcur.execute('CREATE INDEX IF NOT EXISTS msgidx on messages(rfc822_msgid)')
   exists = imapconn.response('exists')
@@ -320,7 +323,7 @@ def rebuildUIDTable(imapconn, sqlconn):
                                      extras).groups()
       time_seconds = time.mktime(imaplib.Internaldate2tuple(message_date))
       message_internaldate = datetime.datetime.fromtimestamp(time_seconds)
-      m = email.parser.HeaderParser().parsestr(header, True)
+      m = header_parser.parsestr(header, True)
       msgid = m.get('message-id')
       if msgid is None:
         msgid = '<DummyMsgID>'
@@ -518,6 +521,7 @@ def main(argv):
     print "GYB needs to backup %s messages" % backup_count
     messages_at_once = options.batch_size
     backed_up_messages = 0
+    header_parser = email.parser.HeaderParser()
     for working_messages in batch(messages_to_backup, messages_at_once):
       #Save message content
       batch_string = ','.join(working_messages)
@@ -570,7 +574,7 @@ def main(argv):
         f = open(message_full_filename, 'wb')
         f.write(full_message)
         f.close()
-        m = email.message_from_string(full_message)
+        m = header_parser.parsestr(full_message, True)
         message_from = m.get('from')
         message_to = m.get('to')
         message_subj = m.get('subject')
@@ -669,7 +673,18 @@ def main(argv):
   # RESTORE #
   elif options.action == 'restore':
     imapconn.select(ALL_MAIL)  # read/write!
-    messages_to_restore = sqlcur.execute('SELECT message_num, message_internaldate, message_filename FROM messages') # All messages
+    if options.restore_label:
+      messages_to_restore = sqlcur.execute('''
+         SELECT message_num, message_internaldate, message_filename 
+           FROM messages WHERE message_num IN 
+           (SELECT DISTINCT message_num from labels 
+              WHERE label = ?)
+      ''', ((options.restore_label),))
+    else:
+      messages_to_restore = sqlcur.execute('''
+         SELECT message_num, message_internaldate, message_filename 
+           FROM messages
+      ''') # All messages
     messages_to_restore_results = sqlcur.fetchall()
     restore_count = len(messages_to_restore_results)
     current = 1
