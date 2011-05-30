@@ -530,10 +530,10 @@ def main(argv):
         sys.exit(3)
 
   if options.action_labels:
-    temp_search = "l:("
+    temp_search = ""
     for label in options.action_labels:
-      temp_search += label.replace(' ', '-') + " OR "
-    options.gmail_search = temp_search[:-4] + ') ' +  options.gmail_search
+      temp_search += "l:" + label.replace(' ', '-') + " OR "
+    options.gmail_search = temp_search[:-4] + ' ' +  options.gmail_search
     if options.debug:
       print "Search string changed to: %s" % options.gmail_search
 
