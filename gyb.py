@@ -23,7 +23,7 @@ For more information, see http://code.google.com/p/got-your-back/
 __program_name__ = 'Got Your Back: Gmail Backup'
 __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
-__version__ = '0.13 Alpha'
+__version__ = '0.14 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
 __db_schema_version__ = '4'
 __db_schema_min_version__ = '2'        #Minimum for restore
@@ -89,10 +89,6 @@ def SetupOptionParser():
     default='backup',
     help='Optional: Action to perform. backup, restore or estimate.')
   parser.add_option('--action-labels', help=SUPPRESS_HELP)
-  parser.add_option('--restore', 
-    action='callback', 
-    callback=get_action_labels,
-    help='Sets the ''restore'' action and takes an optional list of labels to restore.')
   parser.add_option('--backup', 
     action='callback', 
     callback=get_action_labels,
@@ -101,6 +97,10 @@ def SetupOptionParser():
     action='callback', 
     callback=get_action_labels,
     help='Sets the ''estimate'' action and takes an optional list of labels to estimate.')
+  parser.add_option('--restore', 
+    action='callback', 
+    callback=get_action_labels,
+    help='Sets the ''restore'' action and takes an optional list of labels to restore.')
   parser.add_option('--reindex', 
     dest='action',
     action='store_const',
@@ -295,6 +295,7 @@ def convertDB(sqlconn, uidvalidity, oldversion):
   try:
     with sqlconn:
       if oldversion < '3':
+        # Convert to schema 3
         sqlconn.executescript('''
           BEGIN;
           CREATE TABLE uids 
@@ -305,6 +306,7 @@ def convertDB(sqlconn, uidvalidity, oldversion):
           CREATE INDEX flagidx ON flags (message_num);
         ''')
       if oldversion < '4':
+        # Convert to schema 4
         sqlconn.execute('''
           ALTER TABLE messages ADD COLUMN rfc822_msgid TEXT;
         ''')
@@ -326,10 +328,8 @@ def getMessageIDs (sqlconn, backup_folder):
     message_full_filename = os.path.join(backup_folder, filename)
     if os.path.isfile(message_full_filename):
       f = open(message_full_filename, 'rb')
-      msgid = header_parser.parse(f, True).get('message-id')
+      msgid = header_parser.parse(f, True).get('message-id') or '<DummyMsgID>'
       f.close()
-      if msgid is None: 
-        msgid = '<DummyMsgID>'
       sqlcur.execute(
           'UPDATE messages SET rfc822_msgid = ? WHERE message_num = ?',
                      (msgid, message_num))
@@ -339,6 +339,7 @@ def rebuildUIDTable(imapconn, sqlconn):
   sqlcur = sqlconn.cursor()
   header_parser = email.parser.HeaderParser()
   sqlcur.execute('DELETE FROM uids')
+  # Create an index on the Message ID to speed up the process
   sqlcur.execute('CREATE INDEX IF NOT EXISTS msgidx on messages(rfc822_msgid)')
   exists = imapconn.response('exists')
   exists = int(exists[1][0])
@@ -357,9 +358,7 @@ def rebuildUIDTable(imapconn, sqlconn):
       time_seconds = time.mktime(imaplib.Internaldate2tuple(message_date))
       message_internaldate = datetime.datetime.fromtimestamp(time_seconds)
       m = header_parser.parsestr(header, True)
-      msgid = m.get('message-id')
-      if msgid is None:
-        msgid = '<DummyMsgID>'
+      msgid = m.get('message-id') or '<DummyMsgID>'
       message_to = m.get('to')
       message_from = m.get('from')
       message_subject = m.get('subject')
@@ -382,6 +381,7 @@ def rebuildUIDTable(imapconn, sqlconn):
         print uid, rfc822_msgid
     print "\b.",
     sys.stdout.flush() 
+  # There is no need to maintain the Index for normal operations
   sqlcur.execute('DROP INDEX msgidx')
   sqlconn.commit()
 
@@ -747,7 +747,8 @@ def main(argv):
     if restore_count == 0 and options.action_labels:
       print "No messages found in label: %s" % options.action_labels
       print "Available labels are:"
-      for label in sqlcur.execute( 'SELECT DISTINCT LABEL FROM labels'):
+      for label in sqlcur.execute(
+                   'SELECT DISTINCT label COLLATE NOCASE FROM labels'):
         print "\t%s" % label
     current = 1
     for x in messages_to_restore_results:
