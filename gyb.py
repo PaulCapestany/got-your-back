@@ -59,6 +59,26 @@ import gdata.apps.service
 import gimaplib
 
 def SetupOptionParser():
+  def get_restore_labels(option, opt, value, parser):
+    value = []
+    for arg in parser.rargs:
+         # stop on --foo like options
+         if arg[:2] == "--" and len(arg) > 2:
+             break
+         # stop on -a
+         if arg[:1] == "-" and len(arg) > 1:
+             break
+         value.append(arg)
+
+    del parser.rargs[:len(value)]
+    parser.values.restore_label = value
+    if opt == '--restore':
+      parser.values.action = 'restore'
+    elif opt == '--backup':
+      parser.values.action = 'backup'
+    elif opt == '--estimate':
+      parser.values.action = 'estimate'
+
   # Usage message is the module's docstring.
   parser = OptionParser(usage=__doc__)
   parser.add_option('-e', '--email',
@@ -70,6 +90,18 @@ def SetupOptionParser():
     dest='action',
     default='backup',
     help='Optional: Action to perform. backup, restore or estimate.')
+  parser.add_option('--restore', 
+    action='callback', 
+    callback=get_restore_labels,
+    help='Sets the ''restore'' action and takes an optional list of labels to restore.')
+  parser.add_option('--backup', 
+    action='callback', 
+    callback=get_restore_labels,
+    help='Sets the ''backup'' action and takes an optional list of labels to backup.')
+  parser.add_option('--estimate', 
+    action='callback', 
+    callback=get_restore_labels,
+    help='Sets the ''estimate'' action and takes an optional list of labels to estimate.')
   parser.add_option('-f', '--folder',
     dest='folder',
     help='Optional: Folder to use for backup or restore. Default is ./gmail-backup/',
@@ -94,10 +126,6 @@ def SetupOptionParser():
   parser.add_option('-l', '--label-restored',
     dest='label_restored',
     help='Optional: Used on restore only. If specified, all restored messages will receive this label. For example, -l "3-21-11 Restore" will label all uploaded messages with that label.')
-  parser.add_option('-L', '--from-label',
-    dest='restore_label',
-    action='append',
-    help='Optional: Used on restore only. If specified, only messages that were in the specified label will be restored.')
   parser.add_option('-t', '--two-legged',
     dest='two_legged',
     help='Google Apps Business and Education accounts only. Use administrator two legged OAuth to authenticate as end user.')
@@ -496,6 +524,11 @@ def main(argv):
       if db_settings['uidvalidity'] != uidvalidity:
         print "Because of changes on the Gmail server, this folder cannot be used for incremental backups."
         sys.exit(3)
+  if options.restore_label:
+    temp_search = "l:("
+    for label in options.restore_label:
+      temp_search += label.lower().replace(' ', '-') + " OR "
+    options.gmail_search = temp_search[:-4] + ') ' +  options.gmail_search
 
   # BACKUP #
   if options.action == 'backup':
@@ -675,14 +708,27 @@ def main(argv):
   elif options.action == 'restore':
     imapconn.select(ALL_MAIL)  # read/write!
     if options.restore_label:
-      sqlcur.execute('CREATE TEMP TABLE restore (label TEXT)')
-      sqlcur.executemany('INSERT INTO restore (label) VALUES(?)',
-                         ((label,) for label in options.restore_label))
+      sqlcur.execute(
+         'CREATE TEMP TABLE restore_labels (label TEXT COLLATE NOCASE)')
+      for label in options.restore_label:
+        if label.lower() == 'inbox':
+           label = '\\\\Inbox'
+        elif label.lower() == 'sent':
+           label = '\\\\Sent'
+        elif label.lower() == 'sent mail':
+           label = '\\\\Sent'
+        elif label.lower() == 'starred':
+           label = '\\\\Starred'
+        elif label.lower() == 'draft':
+           label = '\\\\Draft'
+        elif label.lower() == 'important':
+           label = '\\\\Important'
+        sqlcur.execute('INSERT INTO restore_labels (label) VALUES(?)',
+                         ((label),))
       messages_to_restore = sqlcur.execute('''
          SELECT message_num, message_internaldate, message_filename 
-           FROM messages WHERE message_num IN 
-           (SELECT DISTINCT message_num from labels 
-              WHERE label IN restore)
+          FROM messages WHERE message_num IN 
+          (SELECT DISTINCT message_num from restore_labels NATURAL JOIN labels) 
       ''')
     else:
       messages_to_restore = sqlcur.execute('''
