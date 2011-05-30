@@ -659,6 +659,10 @@ def main(argv):
     backed_up_messages = 0
     backup_count = len(messages_to_refresh)
     print "GYB needs to refresh %s messages" % backup_count
+    sqlcur.executescript("""
+       CREATE TEMP TABLE current_labels (label TEXT);
+       CREATE TEMP TABLE current_flags (flag TEXT);
+    """)
     messages_at_once *= 100
     for working_messages in batch(messages_to_refresh, messages_at_once):
       #Save message content
@@ -693,16 +697,30 @@ def main(argv):
         uid = search_results.group(2)
         message_flags_string = search_results.group(3)
         message_flags = imaplib.ParseFlags(message_flags_string)
+        sqlcur.execute('DELETE FROM current_labels')
+        sqlcur.execute('DELETE FROM current_flags')
+        sqlcur.executemany(
+           'INSERT INTO current_labels (label) VALUES (?)',
+              ((label,) for label in labels))
+        sqlcur.executemany(
+           'INSERT INTO current_flags (flag) VALUES (?)',
+              ((flag,) for flag in message_flags))
         sqlcur.execute("""DELETE FROM labels where message_num = 
-                   (SELECT message_num from uids where uid = ?)""", ((uid),))
+                   (SELECT message_num from uids where uid = ?)
+                    AND label NOT IN current_labels""", ((uid),))
         sqlcur.execute("""DELETE FROM flags where message_num = 
-                   (SELECT message_num from uids where uid = ?)""", ((uid),))
-        sqlcur.executemany("""INSERT INTO labels (message_num, label) 
-            SELECT message_num, ? from uids where uid = ?""", 
-            ((label,uid) for label in labels))
-        sqlcur.executemany("""INSERT INTO flags (message_num, flag) 
-            SELECT message_num, ? from uids where uid = ?""", 
-            ((flag,uid) for flag in message_flags))
+                   (SELECT message_num from uids where uid = ?)
+                    AND flag NOT IN current_flags""", ((uid),))
+        sqlcur.execute("""INSERT INTO labels (message_num, label) 
+            SELECT message_num, label from uids, current_labels 
+               WHERE uid = ? AND label NOT IN 
+               (SELECT label FROM labels NATURAL JOIN uids
+                 where uid = ?)""", (uid,uid))
+        sqlcur.execute("""INSERT INTO flags (message_num, flag) 
+            SELECT message_num, flag from uids, current_flags 
+               WHERE uid = ? AND flag NOT IN 
+               (SELECT flag FROM flags NATURAL JOIN uids
+                 where uid = ?)""", (uid,uid))
         backed_up_messages += 1
 
       sqlconn.commit()
