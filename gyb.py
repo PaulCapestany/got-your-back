@@ -29,7 +29,7 @@ __db_schema_version__ = '4'
 __db_schema_min_version__ = '2'        #Minimum for restore
 
 import imaplib
-from optparse import OptionParser
+from optparse import OptionParser, SUPPRESS_HELP
 import webbrowser
 import sys
 import os
@@ -59,7 +59,7 @@ import gdata.apps.service
 import gimaplib
 
 def SetupOptionParser():
-  def get_restore_labels(option, opt, value, parser):
+  def get_action_labels(option, opt, value, parser):
     value = []
     for arg in parser.rargs:
          # stop on --foo like options
@@ -68,16 +68,14 @@ def SetupOptionParser():
          # stop on -a
          if arg[:1] == "-" and len(arg) > 1:
              break
-         value.append(arg)
+         value.append(arg.lower())
 
     del parser.rargs[:len(value)]
-    parser.values.restore_label = value
-    if opt == '--restore':
-      parser.values.action = 'restore'
-    elif opt == '--backup':
-      parser.values.action = 'backup'
-    elif opt == '--estimate':
-      parser.values.action = 'estimate'
+    if 'all' in value or 'all mail' in value:
+      value = []
+    parser.values.action_labels = value
+    # opt is like '--backup'
+    parser.values.action = opt[2:]
 
   # Usage message is the module's docstring.
   parser = OptionParser(usage=__doc__)
@@ -90,18 +88,24 @@ def SetupOptionParser():
     dest='action',
     default='backup',
     help='Optional: Action to perform. backup, restore or estimate.')
+  parser.add_option('--action-labels', help=SUPPRESS_HELP)
   parser.add_option('--restore', 
     action='callback', 
-    callback=get_restore_labels,
+    callback=get_action_labels,
     help='Sets the ''restore'' action and takes an optional list of labels to restore.')
   parser.add_option('--backup', 
     action='callback', 
-    callback=get_restore_labels,
+    callback=get_action_labels,
     help='Sets the ''backup'' action and takes an optional list of labels to backup.')
   parser.add_option('--estimate', 
     action='callback', 
-    callback=get_restore_labels,
+    callback=get_action_labels,
     help='Sets the ''estimate'' action and takes an optional list of labels to estimate.')
+  parser.add_option('--reindex', 
+    dest='action',
+    action='store_const',
+    const='reindex',
+    help=SUPPRESS_HELP)
   parser.add_option('-f', '--folder',
     dest='folder',
     help='Optional: Folder to use for backup or restore. Default is ./gmail-backup/',
@@ -524,11 +528,14 @@ def main(argv):
       if db_settings['uidvalidity'] != uidvalidity:
         print "Because of changes on the Gmail server, this folder cannot be used for incremental backups."
         sys.exit(3)
-  if options.restore_label:
+
+  if options.action_labels:
     temp_search = "l:("
-    for label in options.restore_label:
-      temp_search += label.lower().replace(' ', '-') + " OR "
+    for label in options.action_labels:
+      temp_search += label.replace(' ', '-') + " OR "
     options.gmail_search = temp_search[:-4] + ') ' +  options.gmail_search
+    if options.debug:
+      print "Search string changed to: %s" % options.gmail_search
 
   # BACKUP #
   if options.action == 'backup':
@@ -707,21 +714,21 @@ def main(argv):
   # RESTORE #
   elif options.action == 'restore':
     imapconn.select(ALL_MAIL)  # read/write!
-    if options.restore_label:
+    if options.action_labels:
       sqlcur.execute(
          'CREATE TEMP TABLE restore_labels (label TEXT COLLATE NOCASE)')
-      for label in options.restore_label:
-        if label.lower() == 'inbox':
+      for label in options.action_labels:
+        if label == 'inbox':
            label = '\\\\Inbox'
-        elif label.lower() == 'sent':
+        elif label == 'sent':
            label = '\\\\Sent'
-        elif label.lower() == 'sent mail':
+        elif label == 'sent mail':
            label = '\\\\Sent'
-        elif label.lower() == 'starred':
+        elif label == 'starred':
            label = '\\\\Starred'
-        elif label.lower() == 'draft':
+        elif label == 'draft':
            label = '\\\\Draft'
-        elif label.lower() == 'important':
+        elif label == 'important':
            label = '\\\\Important'
         sqlcur.execute('INSERT INTO restore_labels (label) VALUES(?)',
                          ((label),))
@@ -737,8 +744,8 @@ def main(argv):
       ''') # All messages
     messages_to_restore_results = sqlcur.fetchall()
     restore_count = len(messages_to_restore_results)
-    if restore_count == 0 and options.restore_label:
-      print "No messages found in label: %s" % options.restore_label
+    if restore_count == 0 and options.action_labels:
+      print "No messages found in label: %s" % options.action_labels
       print "Available labels are:"
       for label in sqlcur.execute( 'SELECT DISTINCT LABEL FROM labels'):
         print "\t%s" % label
