@@ -714,13 +714,13 @@ def main(argv):
         sqlcur.execute("""INSERT INTO labels (message_num, label) 
             SELECT message_num, label from uids, current_labels 
                WHERE uid = ? AND label NOT IN 
-               (SELECT label FROM labels NATURAL JOIN uids
-                 where uid = ?)""", (uid,uid))
+               (SELECT label FROM labels 
+                  WHERE message_num = uids.message_num)""", ((uid),))
         sqlcur.execute("""INSERT INTO flags (message_num, flag) 
             SELECT message_num, flag from uids, current_flags 
                WHERE uid = ? AND flag NOT IN 
-               (SELECT flag FROM flags NATURAL JOIN uids
-                 where uid = ?)""", (uid,uid))
+               (SELECT flag FROM flags 
+                  WHERE message_num = uids.message_num)""", ((uid),))
         backed_up_messages += 1
 
       sqlconn.commit()
