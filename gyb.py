@@ -25,7 +25,7 @@ __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
 __version__ = '0.14 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
-__db_schema_version__ = '4'
+__db_schema_version__ = '5'
 __db_schema_min_version__ = '2'        #Minimum for restore
 
 import imaplib
@@ -310,6 +310,14 @@ def convertDB(sqlconn, uidvalidity, oldversion):
         sqlconn.execute('''
           ALTER TABLE messages ADD COLUMN rfc822_msgid TEXT;
         ''')
+      if oldversion < '5':
+        # Convert to schema 5
+        sqlconn.executescript('''
+          DROP INDEX labelidx;
+          DROP INDEX flagidx;
+          CREATE UNIQUE INDEX labelidx ON labels (message_num, label);
+          CREATE UNIQUE INDEX flagidx ON flags (message_num, flag);
+        ''')
       sqlconn.executemany('REPLACE INTO settings (name, value) VALUES (?,?)',
                         (('uidvalidity',uidvalidity), 
                          ('db_version', __db_schema_version__)) )   
@@ -418,8 +426,8 @@ def initializeDB(sqlcur, sqlconn, email, uidvalidity):
    CREATE TABLE flags (message_num INTEGER, flag TEXT);
    CREATE TABLE uids (message_num INTEGER, uid INTEGER PRIMARY KEY);
    CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT);
-   CREATE INDEX labelidx ON labels (message_num);
-   CREATE INDEX flagidx ON flags (message_num);
+   CREATE UNIQUE INDEX labelidx ON labels (message_num, label);
+   CREATE UNIQUE INDEX flagidx ON flags (message_num, flag);
   ''')
   sqlcur.executemany('INSERT INTO settings (name, value) VALUES (?, ?)', 
          (('email_address', email),
