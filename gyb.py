@@ -600,7 +600,7 @@ def main(argv):
           imapconn.select(ALL_MAIL, readonly=True)
       for everything_else_string, full_message in (x for x in d if x != ')'):
         search_results = re.search('X-GM-LABELS \((.*)\) UID ([0-9]*) (INTERNALDATE \".*\") (FLAGS \(.*\))', everything_else_string)
-        labels = shlex.split(search_results.group(1).replace('\\', '\\\\'))
+        labels = shlex.split(search_results.group(1))
         uid = search_results.group(2)
         message_date_string = search_results.group(3)
         message_flags_string = search_results.group(4)
@@ -701,7 +701,7 @@ def main(argv):
           imapconn.select(ALL_MAIL, readonly=True)
       for results in d:
         search_results = re.search('X-GM-LABELS \((.*)\) UID ([0-9]*) (FLAGS \(.*\))', results)
-        labels = shlex.split(search_results.group(1).replace('\\', '\\\\'))
+        labels = shlex.split(search_results.group(1))
         uid = search_results.group(2)
         message_flags_string = search_results.group(3)
         message_flags = imaplib.ParseFlags(message_flags_string)
@@ -745,17 +745,17 @@ def main(argv):
          'CREATE TEMP TABLE restore_labels (label TEXT COLLATE NOCASE)')
       for label in options.action_labels:
         if label == 'inbox':
-           label = '\\\\Inbox'
+           label = '\\Inbox'
         elif label == 'sent':
-           label = '\\\\Sent'
+           label = '\\Sent'
         elif label == 'sent mail':
-           label = '\\\\Sent'
+           label = '\\Sent'
         elif label == 'starred':
-           label = '\\\\Starred'
+           label = '\\Starred'
         elif label == 'draft':
-           label = '\\\\Draft'
+           label = '\\Draft'
         elif label == 'important':
-           label = '\\\\Important'
+           label = '\\Important'
         sqlcur.execute('INSERT INTO restore_labels (label) VALUES(?)',
                          ((label),))
       messages_to_restore = sqlcur.execute('''
@@ -796,7 +796,7 @@ def main(argv):
       labels_results = sqlcur.fetchall()
       labels = []
       for l in labels_results:
-        labels.append(l[0])
+        labels.append(l[0].replace('\\','\\\\').replace('"','\\"'))
       if options.label_restored:
         labels.append(options.label_restored)
       flags_query = sqlcur.execute('SELECT DISTINCT flag FROM flags WHERE message_num = ?', (message_num,))
