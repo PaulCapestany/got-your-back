@@ -847,7 +847,7 @@ def main(argv):
           imapconn.select(ALL_MAIL)
       #Save the fact that it is completed
       sqlconn.execute(
-        'INSERT INTO restored_messages (message_num) VALUES (?)',
+        'INSERT OR IGNORE INTO restored_messages (message_num) VALUES (?)',
            (message_num,))
       sqlconn.commit()
     sqlconn.execute('DETACH resume')
