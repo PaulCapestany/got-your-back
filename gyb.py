@@ -743,44 +743,48 @@ def main(argv):
   # RESTORE #
   elif options.action == 'restore':
     imapconn.select(ALL_MAIL)  # read/write!
-    if not options.resume:
-      sqlcur.executescript('''
-         CREATE TABLE IF NOT EXISTS restore_messages 
-                        (message_num INTEGER PRIMARY KEY); 
-         DELETE FROM restore_messages;
-      ''')
-      if options.action_labels:
-        sqlcur.execute(
-           'CREATE TEMP TABLE restore_labels (label TEXT COLLATE NOCASE)')
-        for label in options.action_labels:
-          if label == 'inbox':
-             label = '\\Inbox'
-          elif label == 'sent':
-             label = '\\Sent'
-          elif label == 'sent mail':
-             label = '\\Sent'
-          elif label == 'starred':
-             label = '\\Starred'
-          elif label == 'draft':
-             label = '\\Draft'
-          elif label == 'important':
-             label = '\\Important'
-          sqlcur.execute(
-            'INSERT INTO restore_labels (label) VALUES(?)',
-                           ((label),))
-        sqlcur.execute('''
-          INSERT INTO restore_messages SELECT message_num FROM messages
-            WHERE message_num IN 
-            (SELECT DISTINCT message_num from restore_labels NATURAL JOIN labels) 
-        ''')
-      else:
-        sqlcur.execute('''
-          INSERT INTO restore_messages SELECT message_num FROM messages
-        ''') # All messages
-    sqlcur.execute('''
-       SELECT message_num, message_internaldate, message_filename 
-           FROM messages WHERE message_num IN restore_messages
+    resumedb = os.path.join(options.folder, 
+                            "%s-restored.sqlite" % options.email)
+    sqlcur.execute('ATTACH ? as resume', (resumedb,))
+    sqlcur.executescript('''
+       CREATE TABLE IF NOT EXISTS resume.restored_messages 
+                      (message_num INTEGER PRIMARY KEY); 
+       CREATE TEMP TABLE skip_messages (message_num INTEGER PRIMARY KEY);
     ''')
+    if options.resume:
+      sqlcur.execute('''
+         INSERT INTO skip_messages SELECT message_num from restored_messages
+      ''')
+    if options.action_labels:
+      sqlcur.execute(
+         'CREATE TEMP TABLE restore_labels (label TEXT COLLATE NOCASE)')
+      for label in options.action_labels:
+        if label == 'inbox':
+           label = '\\Inbox'
+        elif label == 'sent':
+           label = '\\Sent'
+        elif label == 'sent mail':
+           label = '\\Sent'
+        elif label == 'starred':
+           label = '\\Starred'
+        elif label == 'draft':
+           label = '\\Draft'
+        elif label == 'important':
+           label = '\\Important'
+        sqlcur.execute(
+          'INSERT INTO restore_labels (label) VALUES(?)',
+                         ((label),))
+      sqlcur.execute('''
+        SELECT message_num, message_internaldate, message_filename FROM messages
+          WHERE message_num IN 
+          (SELECT DISTINCT message_num from restore_labels NATURAL JOIN labels)
+          AND message_num NOT IN skip_messages
+      ''')
+    else:
+      sqlcur.execute('''
+        SELECT message_num, message_internaldate, message_filename FROM messages
+          WHERE message_num NOT IN skip_messages
+      ''') # All messages
     messages_to_restore_results = sqlcur.fetchall()
     restore_count = len(messages_to_restore_results)
     if restore_count == 0 and options.action_labels:
@@ -841,11 +845,12 @@ def main(argv):
           print 'socket.error, retrying...'
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
           imapconn.select(ALL_MAIL)
-      #Clear it from the table in case of resume
+      #Save the fact that it is completed
       sqlconn.execute(
-        'DELETE FROM restore_messages WHERE message_num = ?', (message_num,))
+        'INSERT INTO restored_messages (message_num) VALUES (?)',
+           (message_num,))
       sqlconn.commit()
-    sqlconn.execute('DROP TABLE restore_messages')
+    sqlconn.execute('DETACH resume')
     sqlconn.commit()
   
   # ESTIMATE #
