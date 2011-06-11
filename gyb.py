@@ -23,7 +23,7 @@ For more information, see http://code.google.com/p/got-your-back/
 __program_name__ = 'Got Your Back: Gmail Backup'
 __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
-__version__ = '0.14 Alpha'
+__version__ = '0.15 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
 __db_schema_version__ = '5'
 __db_schema_min_version__ = '2'        #Minimum for restore
@@ -41,7 +41,6 @@ import StringIO
 import socket
 import datetime
 import sqlite3
-import email
 import email.parser
 import re
 import shlex
@@ -101,6 +100,10 @@ def SetupOptionParser():
     action='callback', 
     callback=get_action_labels,
     help='Sets the ''restore'' action and takes an optional list of labels to restore.')
+  parser.add_option('--resume', 
+    action='store_true', 
+    default=False,
+    help='With ''restore'', resume an interrupted restore.')
   parser.add_option('--reindex', 
     dest='action',
     action='store_const',
@@ -644,8 +647,8 @@ def main(argv):
                          message_id))
         message_num = sqlcur.lastrowid
         sqlcur.execute("""
-             INSERT INTO uids (message_num, uid) VALUES (?, ?)""", 
-                              (message_num, uid))
+             REPLACE INTO uids (message_num, uid) VALUES (?, ?)""", 
+                               (message_num, uid))
         for label in labels:
           sqlcur.execute("""
              INSERT INTO labels (message_num, label) VALUES (?, ?)""",  
@@ -740,34 +743,44 @@ def main(argv):
   # RESTORE #
   elif options.action == 'restore':
     imapconn.select(ALL_MAIL)  # read/write!
-    if options.action_labels:
-      sqlcur.execute(
-         'CREATE TEMP TABLE restore_labels (label TEXT COLLATE NOCASE)')
-      for label in options.action_labels:
-        if label == 'inbox':
-           label = '\\Inbox'
-        elif label == 'sent':
-           label = '\\Sent'
-        elif label == 'sent mail':
-           label = '\\Sent'
-        elif label == 'starred':
-           label = '\\Starred'
-        elif label == 'draft':
-           label = '\\Draft'
-        elif label == 'important':
-           label = '\\Important'
-        sqlcur.execute('INSERT INTO restore_labels (label) VALUES(?)',
-                         ((label),))
-      messages_to_restore = sqlcur.execute('''
-         SELECT message_num, message_internaldate, message_filename 
-          FROM messages WHERE message_num IN 
-          (SELECT DISTINCT message_num from restore_labels NATURAL JOIN labels) 
+    if not options.resume:
+      sqlcur.executescript('''
+         CREATE TABLE IF NOT EXISTS restore_messages 
+                        (message_num INTEGER PRIMARY KEY); 
+         DELETE FROM restore_messages;
       ''')
-    else:
-      messages_to_restore = sqlcur.execute('''
-         SELECT message_num, message_internaldate, message_filename 
-           FROM messages
-      ''') # All messages
+      if options.action_labels:
+        sqlcur.execute(
+           'CREATE TEMP TABLE restore_labels (label TEXT COLLATE NOCASE)')
+        for label in options.action_labels:
+          if label == 'inbox':
+             label = '\\Inbox'
+          elif label == 'sent':
+             label = '\\Sent'
+          elif label == 'sent mail':
+             label = '\\Sent'
+          elif label == 'starred':
+             label = '\\Starred'
+          elif label == 'draft':
+             label = '\\Draft'
+          elif label == 'important':
+             label = '\\Important'
+          sqlcur.execute(
+            'INSERT INTO restore_labels (label) VALUES(?)',
+                           ((label),))
+        sqlcur.execute('''
+          INSERT INTO restore_messages SELECT message_num FROM messages
+            WHERE message_num IN 
+            (SELECT DISTINCT message_num from restore_labels NATURAL JOIN labels) 
+        ''')
+      else:
+        sqlcur.execute('''
+          INSERT INTO restore_messages SELECT message_num FROM messages
+        ''') # All messages
+    sqlcur.execute('''
+       SELECT message_num, message_internaldate, message_filename 
+           FROM messages WHERE message_num IN restore_messages
+    ''')
     messages_to_restore_results = sqlcur.fetchall()
     restore_count = len(messages_to_restore_results)
     if restore_count == 0 and options.action_labels:
@@ -776,9 +789,10 @@ def main(argv):
       for label in sqlcur.execute(
                    'SELECT DISTINCT label COLLATE NOCASE FROM labels'):
         print "\t%s" % label
-    current = 1
+    current = 0
     for x in messages_to_restore_results:
       restart_line()
+      current += 1
       sys.stdout.write("restoring message %s of %s" % (current, restore_count))
       sys.stdout.flush()
       message_num = x[0]
@@ -827,7 +841,12 @@ def main(argv):
           print 'socket.error, retrying...'
           imapconn = gimaplib.ImapConnect(generateXOAuthString(key, secret, options.email, options.two_legged), options.debug, options.compress)
           imapconn.select(ALL_MAIL)
-      current = current + 1
+      #Clear it from the table in case of resume
+      sqlconn.execute(
+        'DELETE FROM restore_messages WHERE message_num = ?', (message_num,))
+      sqlconn.commit()
+    sqlconn.execute('DROP TABLE restore_messages')
+    sqlconn.commit()
   
   # ESTIMATE #
   elif options.action == 'estimate':
