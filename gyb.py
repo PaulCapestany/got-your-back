@@ -115,7 +115,7 @@ def SetupOptionParser():
     default='XXXuse-email-addessXXX')
   parser.add_option('-s', '--search',
     dest='gmail_search',
-    default='in:anywhere',
+    default='',
     help='Optional: Gmail search to perform, matching messages are backed up. Text like *7d* will be replaced by the date 7 days ago. For example, -s "after:*3d*" would search for "after:%s".' % (datetime.datetime.now() - datetime.timedelta(3)).strftime('%Y/%m/%d'))
   parser.add_option('-v', '--version',
     action='store_true',
@@ -250,7 +250,8 @@ def getMessagesToBackupList(imapconn, gmail_search='in:anywhere'):
       else:
         gmail_search_list.append(search_part)
     gmail_search = ' '.join(gmail_search_list)
-  gmail_search = '"' + gmail_search + '"'
+  if gmail_search:
+    print 'using Gmail search: "%s"' % gmail_search
   return gimaplib.GImapSearch(imapconn, gmail_search)
 
 def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):

@@ -159,6 +159,8 @@ def GImapSearch(imapconn, gmail_search):
   Note: Only the IMAP Selected folder is searched, it's as if 'in:<current IMAP folder>' is appended to all searches. If you wish to search all mail, select '[Gmail]/All Mail' before performing the search.
   '''
   #t, d = imapconn.search(None, 'X-GM-RAW', gmail_search)
+  gmail_search = gmail_search.replace('\\', '\\\\').replace('"', '\\"')
+  gmail_search = '"' + gmail_search + '"'
   t, d = imapconn.uid('SEARCH', 'X-GM-RAW', gmail_search)
   if t != 'OK':
     raise GImapSearchError('GImap Search Failed: %s' % t)
