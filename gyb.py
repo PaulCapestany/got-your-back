@@ -229,29 +229,28 @@ def generateXOAuthString(token, secret, email, two_legged=False):
     return '''GET https://mail.google.com/mail/b/%s/imap/ oauth_consumer_key="anonymous",oauth_nonce="%s",oauth_signature="%s",oauth_signature_method="HMAC-SHA1",oauth_timestamp="%s",oauth_token="%s",oauth_version="1.0"''' % (email, nonce, urllib.quote(signature), timestamp, urllib.quote(token))
 
 def getMessagesToBackupList(imapconn, gmail_search='in:anywhere'):
-  if gmail_search.find('*'):
-    search_parts = gmail_search.split()
-    gmail_search_list = []
-    for search_part in search_parts:
-      match = re.search('(.*)\*(\d+)([dwmy])', search_part)
-      if match:
-        prefix, value, time_unit = match.groups()
-        days = int(value or 1)   # Default 1 unit
-        if time_unit == 'd':
-          pass
-        elif time_unit == 'w':
-          days *= 7
-        elif time_unit == 'm':
-          days *= 30
-        elif time_unit == 'y':
-          days *= 365
-        date = (datetime.datetime.now() - datetime.timedelta(days)).strftime('%Y/%m/%d')
-        gmail_search_list.append(prefix + date)
-      else:
-        gmail_search_list.append(search_part)
-    gmail_search = ' '.join(gmail_search_list)
+  search_in = gmail_search
+  gmail_search = ''
+  while search_in:
+    match = re.search('(.*?)\*(\d+)([dwmy])(.*)', search_in)
+    if match:
+      prefix, value, time_unit, search_in = match.groups()
+      days = int(value) 
+      if time_unit == 'd':
+        pass
+      elif time_unit == 'w':
+        days *= 7
+      elif time_unit == 'm':
+        days *= 30
+      elif time_unit == 'y':
+        days *= 365
+      date = (datetime.datetime.now() - datetime.timedelta(days)).strftime('%Y/%m/%d')
+      gmail_search += prefix + date
+    else:
+      gmail_search += search_in
+      break
   if gmail_search:
-    print 'using Gmail search: "%s"' % gmail_search
+    print 'using Gmail search: %s' % gmail_search
   return gimaplib.GImapSearch(imapconn, gmail_search)
 
 def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):
