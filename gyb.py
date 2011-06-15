@@ -23,7 +23,7 @@ For more information, see http://code.google.com/p/got-your-back/
 __program_name__ = 'Got Your Back: Gmail Backup'
 __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
-__version__ = '0.15 Alpha'
+__version__ = '0.16 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
 __db_schema_version__ = '5'
 __db_schema_min_version__ = '2'        #Minimum for restore
@@ -125,11 +125,6 @@ def SetupOptionParser():
     action='store_true',
     dest='debug',
     help='Turn on verbose debugging and connection information (for troubleshooting purposes only)')
-  parser.add_option('-B', '--batch-size',
-    dest='batch_size',
-    type='int',
-    default=100,
-    help='Optional: Sets the number of messages to include batch when backing up.')
   parser.add_option('-l', '--label-restored',
     dest='label_restored',
     help='Optional: Used on restore only. If specified, all restored messages will receive this label. For example, -l "3-21-11 Restore" will label all uploaded messages with that label.')
@@ -145,6 +140,11 @@ def SetupOptionParser():
     action='store_false',
     default=True,
     help='Optional: skips refreshing labels for existing message')
+  parser.add_option('-B', '--batch-size',
+    dest='batch_size',
+    type='int',
+    default=100,
+    help='Optional: Sets the number of messages to include batch when backing up.')
   return parser
 
 def getProgPath():
@@ -230,25 +230,26 @@ def generateXOAuthString(token, secret, email, two_legged=False):
 
 def getMessagesToBackupList(imapconn, gmail_search='in:anywhere'):
   if gmail_search.find('*'):
-    search_parts = gmail_search.split('*')
-    gmail_search = ''
+    search_parts = gmail_search.split()
+    gmail_search_list = []
     for search_part in search_parts:
-      try:
-        value = int(search_part[:-1])
-        time_unit = search_part[-1:]
+      match = re.search('(.*)\*(\d+)?(.)?', search_part)
+      if match:
+        prefix, value, time_unit = match.groups()
+        days = int(value or 1)   # Default 1 unit
         if time_unit == 'd':
-          days = value
+          pass
         elif time_unit == 'w':
-          days = value * 7
+          days *= 7
         elif time_unit == 'm':
-          days = value * 30
+          days *= 30
         elif time_unit == 'y':
-          days = value * 365
+          days *= 365
         date = (datetime.datetime.now() - datetime.timedelta(days)).strftime('%Y/%m/%d')
-        gmail_search = gmail_search + date
-      except ValueError:
-        gmail_search = gmail_search+search_part
-        continue
+        gmail_search_list.append(prefix + date)
+      else:
+        gmail_search_list.append(search_part)
+    gmail_search = ' '.join(gmail_search_list)
   return gimaplib.GImapSearch(imapconn, gmail_search)
 
 def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):
@@ -614,7 +615,7 @@ def main(argv):
         time_seconds_since_epoch = time.mktime(message_date)
         message_internal_datetime = datetime.datetime.fromtimestamp(time_seconds_since_epoch)
         message_flags = imaplib.ParseFlags(message_flags_string)
-        message_file_name = str(uidvalidity) + "-" + str(uid) + ".eml"
+        message_file_name = "%s-%s.eml" % (uidvalidity, uid)
         message_rel_path = os.path.join(str(message_date.tm_year), 
                                         str(message_date.tm_mon), 
                                         str(message_date.tm_mday))
