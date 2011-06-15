@@ -233,7 +233,7 @@ def getMessagesToBackupList(imapconn, gmail_search='in:anywhere'):
     search_parts = gmail_search.split()
     gmail_search_list = []
     for search_part in search_parts:
-      match = re.search('(.*)\*(\d+)?(.)?', search_part)
+      match = re.search('(.*)\*(\d+)([dwmy])', search_part)
       if match:
         prefix, value, time_unit = match.groups()
         days = int(value or 1)   # Default 1 unit
@@ -250,6 +250,7 @@ def getMessagesToBackupList(imapconn, gmail_search='in:anywhere'):
       else:
         gmail_search_list.append(search_part)
     gmail_search = ' '.join(gmail_search_list)
+  gmail_search = '"' + gmail_search + '"'
   return gimaplib.GImapSearch(imapconn, gmail_search)
 
 def message_is_backed_up(message_num, sqlcur, sqlconn, backup_folder):
