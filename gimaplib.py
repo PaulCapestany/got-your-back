@@ -37,7 +37,6 @@ class MySSL (imaplib.IMAP4_SSL):
       while read < size:
         data = self.read2(min(size-read, 16384))
         read += len(data)
-        #chunks.append(data)
         chunks.write(data)
 
       chunks.seek(0)
@@ -66,9 +65,7 @@ class MySSL (imaplib.IMAP4_SSL):
       line = cStringIO.StringIO()
       while 1:
         char = self.read(1)
-        #line.append(char)
         line.write(char)
-        #if char in ("\n", ""): return ''.join(line)
         if char in ("\n", ""): 
           line.seek(0)
           return line.read()
@@ -142,6 +139,8 @@ def ImapConnect(xoauth_string, debug, compress=False):
     t, d = imap_conn.xatom("COMPRESS", "DEFLATE")
     if t == 'OK':
       imap_conn.start_compressing()
+    else:
+      print "Gmail refused compression: %s %s" % (t, d)
 
   GImapSendID(imap_conn, gyb.__program_name__, gyb.__version__, gyb.__author__, gyb.__email__)
   return imap_conn

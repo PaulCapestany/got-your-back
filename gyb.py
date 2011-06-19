@@ -23,7 +23,7 @@ For more information, see http://code.google.com/p/got-your-back/
 __program_name__ = 'Got Your Back: Gmail Backup'
 __author__ = 'Jay Lee'
 __email__ = 'jay@jhltechservices.com'
-__version__ = '0.16 Alpha'
+__version__ = '0.17 Alpha'
 __license__ = 'Apache License 2.0 (http://www.apache.org/licenses/LICENSE-2.0)'
 __db_schema_version__ = '5'
 __db_schema_min_version__ = '2'        #Minimum for restore
@@ -327,10 +327,11 @@ def convertDB(sqlconn, uidvalidity, oldversion):
                         (('uidvalidity',uidvalidity), 
                          ('db_version', __db_schema_version__)) )   
       sqlconn.commit()
+      print "GYB database converted to version %s" % __db_schema_version__
   except sqlite3.OperationalError, e:
       print "Conversion error: %s" % e.message
+      sys.exit(4)
 
-  print "GYB database converted to version %s" % __db_schema_version__
 
 def getMessageIDs (sqlconn, backup_folder):   
   sqlcur = sqlconn.cursor()
