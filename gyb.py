@@ -134,7 +134,12 @@ def SetupOptionParser():
   parser.add_option('-C', '--compress',
     dest='compress',
     action='store_true',
-    help='Optional: enable compression to reduce bandwidth')
+    help='Optional: enable network compression')
+  parser.add_option('-c', '--no-compress',
+    dest='compress',
+    action='store_false',
+    default=True,
+    help='Optional: disable network compression')
   parser.add_option('-F', '--fast-incremental',
     dest='refresh',
     action='store_false',
@@ -460,7 +465,7 @@ def get_message_size(imapconn, uids):
   
 def main(argv):
   options_parser = SetupOptionParser()
-  (options, args) = options_parser.parse_args()
+  (options, args) = options_parser.parse_args(argv)
   if options.version:
     print 'Got Your Back %s' % __version__
     sys.exit(0)
