@@ -133,12 +133,13 @@ def SetupOptionParser():
     help='Google Apps Business and Education accounts only. Use administrator two legged OAuth to authenticate as end user.')
   parser.add_option('-C', '--compress',
     dest='compress',
-    action='store_true',
+    action='count',
+    default=1,
     help='Optional: enable network compression')
   parser.add_option('-c', '--no-compress',
     dest='compress',
-    action='store_false',
-    default=True,
+    action='store_const',
+    const=0,
     help='Optional: disable network compression')
   parser.add_option('-F', '--fast-incremental',
     dest='refresh',
@@ -913,7 +914,8 @@ def main(argv):
     sqlconn.close()
   except NameError:
     pass
-  #imapconn.display_stats()
+  if options.compress > 1:
+    imapconn.display_stats()
   imapconn.logout()
   
 if __name__ == '__main__':
