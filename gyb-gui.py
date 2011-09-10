@@ -1,10 +1,11 @@
 from Tkinter import *
 import tkFileDialog
 import os
+import gyb
 
 master = Tk()
 master.title("Got Your Back: Gmail Backup")
-master.wm_iconbitmap('gyb.ico')
+#master.wm_iconbitmap('gyb.ico')
 
 action = StringVar()
 debug = IntVar()
@@ -42,16 +43,28 @@ def check_email():
   return True
 
 def execute_gyb():
+  command_list = [sys.argv[0]]
   gmail_search_argument = ' '
   if gmail_search.get() != '' and gmail_search.get() != None:
-    gmail_search_argument = ' -s "%s"' % gmail_search.get()
+    gmail_search_argument = ' -s "%s"' % gmail_search.get().replace('"','\\"')
+    command_list.append('-s')
+    command_list.append("%s" % gmail_search.get() )
+
   debug_argument = ' '
   if debug.get():
     debug_argument = ' --debug'
+    command_list.append('--debug')
+
   folder_argument = ' '
+  #command_list.append('--folder')
+  #command_list.append(folder.get())
+  command_list.append('--email')
+  command_list.append(email.get())
+
   gyb_command = str('cmd /k gyb.exe -a %s -e %s%s%s' % (action.get(), email.get(), gmail_search_argument, debug_argument))
   print gyb_command
-  os.system(gyb_command)
+  #os.system(gyb_command)
+  gyb.main(command_list)
 
 Label (text='Action to perform:').pack(side=TOP,padx=10,pady=10)
 estimate_button = Radiobutton(master, text="Estimate", variable=action, value='estimate', command=estimate_selected)
@@ -72,7 +85,7 @@ two_legged.config(state=DISABLED)
 Label (text='Optional Gmail Search String:').pack(side=TOP,padx=10,pady=10)
 gmail_search = Entry(master, width=25)
 gmail_search.pack(side=TOP,padx=10,pady=10)
-folder = Button(master, text='Choose Backup Directory', command=askdirectory)
+folder = Button(master, text='Choose Backup Directory', command=askdirectory) 
 folder.pack(side=TOP,padx=10,pady=10)
 Checkbutton(master, text="Debug", variable=debug).pack()
 Label (text='Restore Only Option: Label all restored messages:').pack(side=TOP,padx=10,pady=10)
