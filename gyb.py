@@ -61,13 +61,13 @@ def SetupOptionParser():
   def get_action_labels(option, opt, value, parser):
     value = []
     for arg in parser.rargs:
-         # stop on --foo like options
-         if arg[:2] == "--" and len(arg) > 2:
-             break
-         # stop on -a
-         if arg[:1] == "-" and len(arg) > 1:
-             break
-         value.append(arg.lower())
+      # stop on --foo like options
+      if arg[:2] == "--" and len(arg) > 2:
+        break
+      # stop on -a
+      if arg[:1] == "-" and len(arg) > 1:
+        break
+      value.append(arg.lower())
 
     del parser.rargs[:len(value)]
     if 'all' in value or 'all mail' in value:
@@ -399,7 +399,7 @@ def rebuildUIDTable(imapconn, sqlconn):
        print e.message
        print uid, msgid
       if sqlcur.lastrowid is None:
-        print uid, rfc822_msgid
+        print uid, msgid
     print "\b.",
     sys.stdout.flush() 
   # There is no need to maintain the Index for normal operations
@@ -450,12 +450,12 @@ def initializeDB(sqlcur, sqlconn, email, uidvalidity):
 
 def get_message_size(imapconn, uids):
   if type(uids) == type(int()):
-    uid_string == str(uid)
+    uid_string == str(uids)
   else:
     uid_string = ','.join(uids)
   t, d = imapconn.uid('FETCH', uid_string, '(RFC822.SIZE)')
   if t != 'OK':
-    print "Failed to retrieve size for message %s" % uid
+    print "Failed to retrieve size for message %s" % uid_string
     print "%s %s" % (t, d)
     exit(9)
   total_size = 0
@@ -773,17 +773,17 @@ def main(argv):
          'CREATE TEMP TABLE restore_labels (label TEXT COLLATE NOCASE)')
       for label in options.action_labels:
         if label == 'inbox':
-           label = '\\Inbox'
+          label = '\\Inbox'
         elif label == 'sent':
-           label = '\\Sent'
+          label = '\\Sent'
         elif label == 'sent mail':
-           label = '\\Sent'
+          label = '\\Sent'
         elif label == 'starred':
-           label = '\\Starred'
+          label = '\\Starred'
         elif label == 'draft':
-           label = '\\Draft'
+          label = '\\Draft'
         elif label == 'important':
-           label = '\\Important'
+          label = '\\Important'
         sqlcur.execute(
           'INSERT INTO restore_labels (label) VALUES(?)',
                          ((label),))
@@ -884,9 +884,7 @@ def main(argv):
         messages_to_estimate.append(message_num)
     estimate_count = len(messages_to_estimate)
     total_size = float(0)
-    list_position = 0
     messages_at_once = 10000
-    loop_count = 0
     print "Messages to estimate: %s" % estimate_count
     estimated_messages = 0
     for working_messages in batch(messages_to_estimate, messages_at_once):
