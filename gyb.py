@@ -615,7 +615,7 @@ def main(argv):
           imapconn.select(ALL_MAIL, readonly=True)
       for everything_else_string, full_message in (x for x in d if x != ')'):
         search_results = re.search('X-GM-LABELS \((.*)\) UID ([0-9]*) (INTERNALDATE \".*\") (FLAGS \(.*\))', everything_else_string)
-        labels = shlex.split(search_results.group(1))
+        labels = shlex.split(search_results.group(1), posix=False)
         uid = search_results.group(2)
         message_date_string = search_results.group(3)
         message_flags_string = search_results.group(4)
@@ -717,7 +717,7 @@ def main(argv):
           imapconn.select(ALL_MAIL, readonly=True)
       for results in d:
         search_results = re.search('X-GM-LABELS \((.*)\) UID ([0-9]*) (FLAGS \(.*\))', results)
-        labels = shlex.split(search_results.group(1))
+        labels = shlex.split(search_results.group(1), posix=False)
         uid = search_results.group(2)
         message_flags_string = search_results.group(3)
         message_flags = imaplib.ParseFlags(message_flags_string)
